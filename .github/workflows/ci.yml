@@ -4,6 +4,28 @@ on:
     branches: [main]
   pull_request:
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        check: [fmt, vet]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: ${{ matrix.check == 'vet' }}
+      - name: Run go fmt
+        if: matrix.check == 'fmt'
+        run: |
+          diff="$(gofmt -d .)"
+          if [ -n "$diff" ]; then
+            echo "$diff"
+            exit 1
+          fi
+      - name: Run go vet
+        if: matrix.check == 'vet'
+        run: go vet ./...
   test:
     runs-on: ubuntu-latest
     services:
@@ -19,6 +41,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            compattest/go.sum
       - name: Run unit tests
         run: go test ./... -v
       - name: Run compatibility tests
