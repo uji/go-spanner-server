@@ -117,7 +117,7 @@ func (s *SpannerServer) applyInsert(db *store.Database, write *sppb.Mutation_Wri
 
 	cols := write.Columns
 	for _, row := range write.Values {
-		vals := make([]interface{}, len(row.Values))
+		vals := make([]any, len(row.Values))
 		for i, v := range row.Values {
 			colIdx, ok := table.ColIndex[cols[i]]
 			if !ok {
@@ -225,9 +225,9 @@ func (s *SpannerServer) StreamingRead(req *sppb.ReadRequest, stream sppb.Spanner
 		if req.KeySet.All {
 			rows = table.ReadAll(colIndexes)
 		} else if len(req.KeySet.Keys) > 0 {
-			keys := make([][]interface{}, len(req.KeySet.Keys))
+			keys := make([][]any, len(req.KeySet.Keys))
 			for i, k := range req.KeySet.Keys {
-				keyVals := make([]interface{}, len(k.Values))
+				keyVals := make([]any, len(k.Values))
 				for j, v := range k.Values {
 					pkColIdx := table.PKCols[j]
 					decoded, err := store.DecodeValue(v, table.Cols[pkColIdx].Type)
@@ -265,7 +265,7 @@ func (s *SpannerServer) StreamingRead(req *sppb.ReadRequest, stream sppb.Spanner
 	return stream.Send(prs)
 }
 
-func decodeKeyRangeStart(kr *sppb.KeyRange, table *store.Table) ([]interface{}, bool) {
+func decodeKeyRangeStart(kr *sppb.KeyRange, table *store.Table) ([]any, bool) {
 	switch s := kr.StartKeyType.(type) {
 	case *sppb.KeyRange_StartClosed:
 		return decodeKeyValues(s.StartClosed, table), true
@@ -276,7 +276,7 @@ func decodeKeyRangeStart(kr *sppb.KeyRange, table *store.Table) ([]interface{}, 
 	}
 }
 
-func decodeKeyRangeEnd(kr *sppb.KeyRange, table *store.Table) ([]interface{}, bool) {
+func decodeKeyRangeEnd(kr *sppb.KeyRange, table *store.Table) ([]any, bool) {
 	switch e := kr.EndKeyType.(type) {
 	case *sppb.KeyRange_EndClosed:
 		return decodeKeyValues(e.EndClosed, table), true
@@ -287,11 +287,11 @@ func decodeKeyRangeEnd(kr *sppb.KeyRange, table *store.Table) ([]interface{}, bo
 	}
 }
 
-func decodeKeyValues(lv *structpb.ListValue, table *store.Table) []interface{} {
+func decodeKeyValues(lv *structpb.ListValue, table *store.Table) []any {
 	if lv == nil {
 		return nil
 	}
-	vals := make([]interface{}, len(lv.Values))
+	vals := make([]any, len(lv.Values))
 	for i, v := range lv.Values {
 		pkColIdx := table.PKCols[i]
 		decoded, _ := store.DecodeValue(v, table.Cols[pkColIdx].Type)

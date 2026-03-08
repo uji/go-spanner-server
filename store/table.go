@@ -57,8 +57,8 @@ func (t *Table) lessRow(a, b Row) bool {
 }
 
 // InsertRow inserts a row with the given column names and values.
-func (t *Table) InsertRow(cols []string, vals []interface{}) error {
-	data := make([]interface{}, len(t.Cols))
+func (t *Table) InsertRow(cols []string, vals []any) error {
+	data := make([]any, len(t.Cols))
 	for i, col := range cols {
 		idx, ok := t.ColIndex[col]
 		if !ok {
@@ -91,10 +91,10 @@ func (t *Table) ReadAll(colIndexes []int) []Row {
 
 // ReadByKeys returns rows matching the given key sets.
 // Each key is a slice of values for the primary key columns.
-func (t *Table) ReadByKeys(keys [][]interface{}, colIndexes []int) []Row {
+func (t *Table) ReadByKeys(keys [][]any, colIndexes []int) []Row {
 	var result []Row
 	for _, key := range keys {
-		probe := Row{Data: make([]interface{}, len(t.Cols))}
+		probe := Row{Data: make([]any, len(t.Cols))}
 		for i, pk := range t.PKCols {
 			if i < len(key) {
 				probe.Data[pk] = key[i]
@@ -108,15 +108,15 @@ func (t *Table) ReadByKeys(keys [][]interface{}, colIndexes []int) []Row {
 }
 
 // ReadByRange returns rows where primary key is within [start, end].
-func (t *Table) ReadByRange(startKey, endKey []interface{}, startClosed, endClosed bool, colIndexes []int) []Row {
-	startProbe := Row{Data: make([]interface{}, len(t.Cols))}
+func (t *Table) ReadByRange(startKey, endKey []any, startClosed, endClosed bool, colIndexes []int) []Row {
+	startProbe := Row{Data: make([]any, len(t.Cols))}
 	for i, pk := range t.PKCols {
 		if i < len(startKey) {
 			startProbe.Data[pk] = startKey[i]
 		}
 	}
 
-	endProbe := Row{Data: make([]interface{}, len(t.Cols))}
+	endProbe := Row{Data: make([]any, len(t.Cols))}
 	for i, pk := range t.PKCols {
 		if i < len(endKey) {
 			endProbe.Data[pk] = endKey[i]
@@ -157,7 +157,7 @@ func (t *Table) ReadByRange(startKey, endKey []interface{}, startClosed, endClos
 }
 
 func projectRow(r Row, colIndexes []int) Row {
-	data := make([]interface{}, len(colIndexes))
+	data := make([]any, len(colIndexes))
 	for i, idx := range colIndexes {
 		data[i] = r.Data[idx]
 	}

@@ -7,12 +7,12 @@ import (
 
 // Row holds column values in order.
 type Row struct {
-	Data []interface{}
+	Data []any
 }
 
 // compareValues compares two values of the same type.
 // Returns -1, 0, or 1.
-func compareValues(a, b interface{}) int {
+func compareValues(a, b any) int {
 	if a == nil && b == nil {
 		return 0
 	}

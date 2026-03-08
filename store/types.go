@@ -42,7 +42,7 @@ func TypeCodeFromDDL(name string) sppb.TypeCode {
 }
 
 // DecodeValue decodes a structpb.Value into a Go value based on the Spanner type.
-func DecodeValue(v *structpb.Value, typ string) (interface{}, error) {
+func DecodeValue(v *structpb.Value, typ string) (any, error) {
 	if _, ok := v.GetKind().(*structpb.Value_NullValue); ok {
 		return nil, nil
 	}
@@ -96,7 +96,7 @@ func DecodeValue(v *structpb.Value, typ string) (interface{}, error) {
 }
 
 // EncodeValue encodes a Go value into a structpb.Value based on the Spanner type.
-func EncodeValue(v interface{}, typ string) *structpb.Value {
+func EncodeValue(v any, typ string) *structpb.Value {
 	if v == nil {
 		return &structpb.Value{Kind: &structpb.Value_NullValue{}}
 	}
