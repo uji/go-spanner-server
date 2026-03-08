@@ -98,7 +98,7 @@ func TestExample(t *testing.T) {
 ### Supported
 
 - **DDL**: `CREATE TABLE` (INT64, STRING, BOOL, FLOAT64, BYTES, TIMESTAMP)
-- **Mutations**: Insert, InsertOrUpdate
+- **Mutations**: Insert, InsertOrUpdate, Update, Replace, Delete
 - **Read**: `StreamingRead` (AllKeys, point lookups, key ranges), `ExecuteStreamingSql` (simple SELECT)
 - **Sessions**: CreateSession, BatchCreateSessions, GetSession, DeleteSession
 - **Transactions**: BeginTransaction, Commit, Rollback

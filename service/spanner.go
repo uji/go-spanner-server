@@ -98,8 +98,20 @@ func (s *SpannerServer) Commit(ctx context.Context, req *sppb.CommitRequest) (*s
 				return nil, status.Errorf(codes.InvalidArgument, "insert: %v", err)
 			}
 		case *sppb.Mutation_InsertOrUpdate:
-			if err := s.applyInsert(db, op.InsertOrUpdate); err != nil {
+			if err := s.applyReplace(db, op.InsertOrUpdate); err != nil {
 				return nil, status.Errorf(codes.InvalidArgument, "insert_or_update: %v", err)
+			}
+		case *sppb.Mutation_Update:
+			if err := s.applyUpdate(db, op.Update); err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "update: %v", err)
+			}
+		case *sppb.Mutation_Replace:
+			if err := s.applyReplace(db, op.Replace); err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "replace: %v", err)
+			}
+		case *sppb.Mutation_Delete_:
+			if err := s.applyDelete(db, op.Delete); err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "delete: %v", err)
 			}
 		default:
 			return nil, status.Errorf(codes.Unimplemented, "unsupported mutation type: %T", op)
@@ -109,30 +121,108 @@ func (s *SpannerServer) Commit(ctx context.Context, req *sppb.CommitRequest) (*s
 	return &sppb.CommitResponse{}, nil
 }
 
-func (s *SpannerServer) applyInsert(db *store.Database, write *sppb.Mutation_Write) error {
+func (s *SpannerServer) decodeWrite(db *store.Database, write *sppb.Mutation_Write) (*store.Table, []string, [][]any, error) {
 	table, err := db.GetTable(write.Table)
 	if err != nil {
-		return err
+		return nil, nil, nil, err
 	}
 
 	cols := write.Columns
-	for _, row := range write.Values {
+	decoded := make([][]any, len(write.Values))
+	for i, row := range write.Values {
 		vals := make([]any, len(row.Values))
-		for i, v := range row.Values {
-			colIdx, ok := table.ColIndex[cols[i]]
+		for j, v := range row.Values {
+			colIdx, ok := table.ColIndex[cols[j]]
 			if !ok {
-				return fmt.Errorf("column %q not found", cols[i])
+				return nil, nil, nil, fmt.Errorf("column %q not found", cols[j])
 			}
-			decoded, err := store.DecodeValue(v, table.Cols[colIdx].Type)
+			d, err := store.DecodeValue(v, table.Cols[colIdx].Type)
 			if err != nil {
-				return fmt.Errorf("decode column %q: %w", cols[i], err)
+				return nil, nil, nil, fmt.Errorf("decode column %q: %w", cols[j], err)
 			}
-			vals[i] = decoded
+			vals[j] = d
 		}
+		decoded[i] = vals
+	}
+	return table, cols, decoded, nil
+}
+
+func (s *SpannerServer) applyInsert(db *store.Database, write *sppb.Mutation_Write) error {
+	table, cols, rows, err := s.decodeWrite(db, write)
+	if err != nil {
+		return err
+	}
+	for _, vals := range rows {
 		if err := table.InsertRow(cols, vals); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *SpannerServer) applyUpdate(db *store.Database, write *sppb.Mutation_Write) error {
+	table, cols, rows, err := s.decodeWrite(db, write)
+	if err != nil {
+		return err
+	}
+	for _, vals := range rows {
+		if err := table.UpdateRow(cols, vals); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SpannerServer) applyReplace(db *store.Database, write *sppb.Mutation_Write) error {
+	table, cols, rows, err := s.decodeWrite(db, write)
+	if err != nil {
+		return err
+	}
+	for _, vals := range rows {
+		if err := table.ReplaceRow(cols, vals); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SpannerServer) applyDelete(db *store.Database, del *sppb.Mutation_Delete) error {
+	table, err := db.GetTable(del.Table)
+	if err != nil {
+		return err
+	}
+
+	ks := del.KeySet
+	if ks.All {
+		table.DeleteAll()
+		return nil
+	}
+
+	if len(ks.Keys) > 0 {
+		keys := make([][]any, len(ks.Keys))
+		for i, k := range ks.Keys {
+			keyVals := make([]any, len(k.Values))
+			for j, v := range k.Values {
+				pkColIdx := table.PKCols[j]
+				decoded, err := store.DecodeValue(v, table.Cols[pkColIdx].Type)
+				if err != nil {
+					return fmt.Errorf("decode key: %w", err)
+				}
+				keyVals[j] = decoded
+			}
+			keys[i] = keyVals
+		}
+		table.DeleteByKeys(keys)
+	}
+
+	if len(ks.Ranges) > 0 {
+		for _, kr := range ks.Ranges {
+			startKey, startClosed := decodeKeyRangeStart(kr, table)
+			endKey, endClosed := decodeKeyRangeEnd(kr, table)
+			table.DeleteByRange(startKey, endKey, startClosed, endClosed)
+		}
+	}
+
 	return nil
 }
 
