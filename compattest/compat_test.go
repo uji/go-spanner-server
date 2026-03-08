@@ -30,6 +30,10 @@ func TestCompat_DeleteAllAndRead(t *testing.T) {
 	compattest.RunCompat(t, compattest.DeleteAllAndReadDDL, compattest.RunDeleteAllAndRead)
 }
 
+func TestCompat_WhereClause(t *testing.T) {
+	compattest.RunCompat(t, compattest.WhereClauseDDL, compattest.RunWhereClause)
+}
+
 func TestCompat_DeleteByRangeAndRead(t *testing.T) {
 	compattest.RunCompat(t, compattest.DeleteByRangeAndReadDDL, compattest.RunDeleteByRangeAndRead)
 }

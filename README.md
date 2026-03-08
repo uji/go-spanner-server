@@ -99,7 +99,7 @@ func TestExample(t *testing.T) {
 
 - **DDL**: `CREATE TABLE` (INT64, STRING, BOOL, FLOAT64, BYTES, TIMESTAMP)
 - **Mutations**: Insert, InsertOrUpdate, Update, Replace, Delete
-- **Read**: `StreamingRead` (AllKeys, point lookups, key ranges), `ExecuteStreamingSql` (simple SELECT)
+- **Read**: `StreamingRead` (AllKeys, point lookups, key ranges), `ExecuteStreamingSql` (SELECT with WHERE clause)
 - **Sessions**: CreateSession, BatchCreateSessions, GetSession, DeleteSession
 - **Transactions**: BeginTransaction, Commit, Rollback
 - **Admin**: CreateDatabase, UpdateDatabaseDdl, GetDatabase, GetDatabaseDdl
@@ -107,7 +107,6 @@ func TestExample(t *testing.T) {
 ### Not yet supported
 
 - UPDATE / DELETE (DML)
-- WHERE clause
 - Secondary indexes
 - ARRAY / STRUCT types
 - Interleaved tables

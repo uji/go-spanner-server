@@ -157,14 +157,39 @@ func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
 		})
 	}
 
-	// Read all rows (MVP: no WHERE clause)
-	rows := table.ReadAll(colIndexes)
-	for _, row := range rows {
-		vals := make([]*structpb.Value, len(colIndexes))
-		for i, idx := range colIndexes {
-			vals[i] = store.EncodeValue(row.Data[i], table.Cols[idx].Type)
+	if sel.Where != nil {
+		// Read all columns, filter by WHERE, then project
+		allIndexes := make([]int, len(table.Cols))
+		for i := range allIndexes {
+			allIndexes[i] = i
 		}
-		result.Rows = append(result.Rows, &structpb.ListValue{Values: vals})
+		allRows := table.ReadAll(allIndexes)
+
+		ctx := &evalContext{colIndex: table.ColIndex, cols: table.Cols}
+		for _, row := range allRows {
+			ctx.row = row
+			match, err := evalWhere(ctx, sel.Where.Expr)
+			if err != nil {
+				return nil, err
+			}
+			if !match {
+				continue
+			}
+			vals := make([]*structpb.Value, len(colIndexes))
+			for i, idx := range colIndexes {
+				vals[i] = store.EncodeValue(row.Data[idx], table.Cols[idx].Type)
+			}
+			result.Rows = append(result.Rows, &structpb.ListValue{Values: vals})
+		}
+	} else {
+		rows := table.ReadAll(colIndexes)
+		for _, row := range rows {
+			vals := make([]*structpb.Value, len(colIndexes))
+			for i, idx := range colIndexes {
+				vals[i] = store.EncodeValue(row.Data[i], table.Cols[idx].Type)
+			}
+			result.Rows = append(result.Rows, &structpb.ListValue{Values: vals})
+		}
 	}
 
 	return result, nil

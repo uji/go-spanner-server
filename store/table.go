@@ -45,7 +45,7 @@ func NewTable(name string, cols []ColInfo, pkCols []int) *Table {
 
 func (t *Table) lessRow(a, b Row) bool {
 	for _, pk := range t.PKCols {
-		cmp := compareValues(a.Data[pk], b.Data[pk])
+		cmp := CompareValues(a.Data[pk], b.Data[pk])
 		if cmp < 0 {
 			return true
 		}
@@ -163,7 +163,7 @@ func (t *Table) DeleteByRange(startKey, endKey []any, startClosed, endClosed boo
 	t.Rows.AscendGreaterOrEqual(startProbe, func(r Row) bool {
 		cmp := 0
 		for _, pk := range t.PKCols {
-			cmp = compareValues(r.Data[pk], endProbe.Data[pk])
+			cmp = CompareValues(r.Data[pk], endProbe.Data[pk])
 			if cmp != 0 {
 				break
 			}
@@ -174,7 +174,7 @@ func (t *Table) DeleteByRange(startKey, endKey []any, startClosed, endClosed boo
 		if !startClosed {
 			eqStart := true
 			for _, pk := range t.PKCols {
-				if compareValues(r.Data[pk], startProbe.Data[pk]) != 0 {
+				if CompareValues(r.Data[pk], startProbe.Data[pk]) != 0 {
 					eqStart = false
 					break
 				}
@@ -241,7 +241,7 @@ func (t *Table) ReadByRange(startKey, endKey []any, startClosed, endClosed bool,
 	t.Rows.AscendGreaterOrEqual(startProbe, func(r Row) bool {
 		cmp := 0
 		for _, pk := range t.PKCols {
-			cmp = compareValues(r.Data[pk], endProbe.Data[pk])
+			cmp = CompareValues(r.Data[pk], endProbe.Data[pk])
 			if cmp != 0 {
 				break
 			}
@@ -254,7 +254,7 @@ func (t *Table) ReadByRange(startKey, endKey []any, startClosed, endClosed bool,
 				// Check if exactly equal to start
 				eqStart := true
 				for _, pk := range t.PKCols {
-					if compareValues(r.Data[pk], startProbe.Data[pk]) != 0 {
+					if CompareValues(r.Data[pk], startProbe.Data[pk]) != 0 {
 						eqStart = false
 						break
 					}
