@@ -416,17 +416,17 @@ func RunWhereClause(ctx context.Context, t *testing.T, client *spanner.Client) {
 		},
 		{
 			name: "range_and",
-			sql:  "SELECT SingerId FROM Singers WHERE SingerId > 1 AND SingerId < 4",
+			sql:  "SELECT SingerId FROM Singers WHERE SingerId > 1 AND SingerId < 4 ORDER BY SingerId",
 			want: []int64{2, 3},
 		},
 		{
 			name: "like",
-			sql:  "SELECT SingerId FROM Singers WHERE FirstName LIKE 'Ma%'",
+			sql:  "SELECT SingerId FROM Singers WHERE FirstName LIKE 'Ma%' ORDER BY SingerId",
 			want: []int64{1, 4},
 		},
 		{
 			name: "in",
-			sql:  "SELECT SingerId FROM Singers WHERE SingerId IN (1, 3)",
+			sql:  "SELECT SingerId FROM Singers WHERE SingerId IN (1, 3) ORDER BY SingerId",
 			want: []int64{1, 3},
 		},
 		{

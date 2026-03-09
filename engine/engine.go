@@ -1,7 +1,10 @@
 package engine
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
+	"strconv"
 
 	"github.com/cloudspannerecosystem/memefish"
 	"github.com/cloudspannerecosystem/memefish/ast"
@@ -28,8 +31,20 @@ func Execute(db *store.Database, sql string) (*Result, error) {
 }
 
 func executeQuery(db *store.Database, qs *ast.QueryStatement) (*Result, error) {
-	sel, ok := qs.Query.(*ast.Select)
-	if !ok {
+	var sel *ast.Select
+	var orderBy *ast.OrderBy
+
+	switch q := qs.Query.(type) {
+	case *ast.Select:
+		sel = q
+	case *ast.Query:
+		var ok bool
+		sel, ok = q.Query.(*ast.Select)
+		if !ok {
+			return nil, fmt.Errorf("unsupported query type: %T", q.Query)
+		}
+		orderBy = q.OrderBy
+	default:
 		return nil, fmt.Errorf("unsupported query type: %T", qs.Query)
 	}
 
@@ -38,7 +53,18 @@ func executeQuery(db *store.Database, qs *ast.QueryStatement) (*Result, error) {
 		return executeSelectLiteral(sel)
 	}
 
-	return executeSelectFrom(db, sel)
+	result, err := executeSelectFrom(db, sel)
+	if err != nil {
+		return nil, err
+	}
+
+	if orderBy != nil {
+		if err := applyOrderBy(result, orderBy); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
 }
 
 // extractExpr extracts the underlying Expr from a SelectItem.
@@ -96,6 +122,89 @@ func executeSelectLiteral(sel *ast.Select) (*Result, error) {
 
 	result.Rows = []*structpb.ListValue{{Values: rowVals}}
 	return result, nil
+}
+
+// applyOrderBy sorts result rows by the ORDER BY clause.
+func applyOrderBy(result *Result, orderBy *ast.OrderBy) error {
+	// Resolve column indexes for ORDER BY items
+	type orderKey struct {
+		colIdx   int
+		typeCode sppb.TypeCode
+		desc     bool
+	}
+	var keys []orderKey
+	for _, item := range orderBy.Items {
+		ident, ok := item.Expr.(*ast.Ident)
+		if !ok {
+			return fmt.Errorf("unsupported ORDER BY expression: %T", item.Expr)
+		}
+		colIdx := -1
+		for i, col := range result.Columns {
+			if col.Name == ident.Name {
+				colIdx = i
+				break
+			}
+		}
+		if colIdx < 0 {
+			return fmt.Errorf("column %q not found in ORDER BY", ident.Name)
+		}
+		keys = append(keys, orderKey{
+			colIdx:   colIdx,
+			typeCode: result.Columns[colIdx].Type.Code,
+			desc:     item.Dir == ast.DirectionDesc,
+		})
+	}
+
+	slices.SortFunc(result.Rows, func(a, b *structpb.ListValue) int {
+		for _, k := range keys {
+			va := a.Values[k.colIdx]
+			vb := b.Values[k.colIdx]
+			c := compareValues(va, vb, k.typeCode)
+			if c != 0 {
+				if k.desc {
+					return -c
+				}
+				return c
+			}
+		}
+		return 0
+	})
+	return nil
+}
+
+// compareValues compares two protobuf values for sorting.
+// typeCode is used to determine the correct comparison strategy.
+func compareValues(a, b *structpb.Value, typeCode sppb.TypeCode) int {
+	_, aNil := a.Kind.(*structpb.Value_NullValue)
+	_, bNil := b.Kind.(*structpb.Value_NullValue)
+	if aNil && bNil {
+		return 0
+	}
+	if aNil {
+		return -1
+	}
+	if bNil {
+		return 1
+	}
+
+	aStr, aOk := a.Kind.(*structpb.Value_StringValue)
+	bStr, bOk := b.Kind.(*structpb.Value_StringValue)
+	if aOk && bOk {
+		// INT64 is encoded as string in Spanner protobuf; compare numerically.
+		if typeCode == sppb.TypeCode_INT64 {
+			aInt, _ := strconv.ParseInt(aStr.StringValue, 10, 64)
+			bInt, _ := strconv.ParseInt(bStr.StringValue, 10, 64)
+			return cmp.Compare(aInt, bInt)
+		}
+		return cmp.Compare(aStr.StringValue, bStr.StringValue)
+	}
+
+	aNum, aOk := a.Kind.(*structpb.Value_NumberValue)
+	bNum, bOk := b.Kind.(*structpb.Value_NumberValue)
+	if aOk && bOk {
+		return cmp.Compare(aNum.NumberValue, bNum.NumberValue)
+	}
+	return 0
 }
 
 func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {

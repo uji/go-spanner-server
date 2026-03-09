@@ -231,3 +231,117 @@ func TestWhere_LikeUnderscore(t *testing.T) {
 		t.Errorf("expected [1], got %v", ids)
 	}
 }
+
+func TestOrderBy_Asc(t *testing.T) {
+	db := setupTestDB(t)
+	ids := queryIDs(t, db, "SELECT SingerId FROM Singers ORDER BY SingerId")
+	want := []int64{1, 2, 3, 4}
+	if len(ids) != len(want) {
+		t.Fatalf("expected %v, got %v", want, ids)
+	}
+	for i, id := range ids {
+		if id != want[i] {
+			t.Errorf("expected ids %v, got %v", want, ids)
+			break
+		}
+	}
+}
+
+func TestOrderBy_Desc(t *testing.T) {
+	db := setupTestDB(t)
+	ids := queryIDs(t, db, "SELECT SingerId FROM Singers ORDER BY SingerId DESC")
+	want := []int64{4, 3, 2, 1}
+	if len(ids) != len(want) {
+		t.Fatalf("expected %v, got %v", want, ids)
+	}
+	for i, id := range ids {
+		if id != want[i] {
+			t.Errorf("expected ids %v, got %v", want, ids)
+			break
+		}
+	}
+}
+
+func TestOrderBy_StringColumn(t *testing.T) {
+	db := setupTestDB(t)
+	result, err := Execute(db, "SELECT FirstName FROM Singers WHERE LastName IS NOT NULL ORDER BY FirstName")
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	want := []string{"Catalina", "Marc", "Maria"}
+	if len(result.Rows) != len(want) {
+		t.Fatalf("expected %d rows, got %d", len(want), len(result.Rows))
+	}
+	for i, row := range result.Rows {
+		got := row.Values[0].GetStringValue()
+		if got != want[i] {
+			t.Errorf("row %d: expected %q, got %q", i, want[i], got)
+		}
+	}
+}
+
+func TestOrderBy_NullHandling(t *testing.T) {
+	db := setupTestDB(t)
+	// NULL should come first in ASC order
+	result, err := Execute(db, "SELECT SingerId, LastName FROM Singers ORDER BY LastName")
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if len(result.Rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(result.Rows))
+	}
+	// First row should be the NULL LastName (SingerId=3)
+	firstID := result.Rows[0].Values[0].GetStringValue()
+	if firstID != "3" {
+		t.Errorf("expected NULL row (SingerId=3) first, got SingerId=%s", firstID)
+	}
+}
+
+func TestOrderBy_Int64NumericComparison(t *testing.T) {
+	// Verify that INT64 ORDER BY uses numeric comparison, not lexicographic.
+	db := store.NewDatabase()
+	ddls := []string{
+		`CREATE TABLE Items (
+			ItemId INT64 NOT NULL,
+			Name STRING(1024),
+		) PRIMARY KEY (ItemId)`,
+	}
+	for _, ddl := range ddls {
+		if err := db.ApplyDDL(ddl); err != nil {
+			t.Fatalf("failed to apply DDL: %v", err)
+		}
+	}
+	table, _ := db.GetTable("Items")
+	for _, id := range []int64{1, 2, 10, 20, 100} {
+		if err := table.InsertRow([]string{"ItemId", "Name"}, []any{id, "item"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ids := queryIDs(t, db, "SELECT ItemId FROM Items ORDER BY ItemId")
+	want := []int64{1, 2, 10, 20, 100}
+	if len(ids) != len(want) {
+		t.Fatalf("expected %v, got %v", want, ids)
+	}
+	for i, id := range ids {
+		if id != want[i] {
+			t.Errorf("expected ids %v, got %v (numeric ORDER BY broken)", want, ids)
+			break
+		}
+	}
+}
+
+func TestOrderBy_WithWhere(t *testing.T) {
+	db := setupTestDB(t)
+	ids := queryIDs(t, db, "SELECT SingerId FROM Singers WHERE SingerId > 1 ORDER BY SingerId DESC")
+	want := []int64{4, 3, 2}
+	if len(ids) != len(want) {
+		t.Fatalf("expected %v, got %v", want, ids)
+	}
+	for i, id := range ids {
+		if id != want[i] {
+			t.Errorf("expected ids %v, got %v", want, ids)
+			break
+		}
+	}
+}
