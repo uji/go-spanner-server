@@ -4,11 +4,11 @@ This package provides a dual-backend compatibility testing framework for go-span
 
 ## Architecture
 
-- **`compattest.go`** — `TestBackend` interface and `RunCompat` helper that runs tests against all available backends.
-- **`backend_server.go`** — In-process go-spanner-server backend using bufconn. Always available.
-- **`backend_emulator.go`** — Cloud Spanner Emulator backend. Activated when `SPANNER_EMULATOR_HOST` is set.
-- **`tests.go`** — Test case functions (DDL + test function pairs).
-- **`compat_test.go`** — Test runner that wires test cases to `RunCompat`.
+- **`helper_test.go`** — `testBackend` interface and `runCompat` helper that runs tests against all available backends.
+- **`backend_server_test.go`** — In-process go-spanner-server backend using bufconn. Always available.
+- **`backend_emulator_test.go`** — Cloud Spanner Emulator backend. Activated when `SPANNER_EMULATOR_HOST` is set.
+- **`mutations_test.go`** — Mutation test cases (Insert, Update, Delete, Replace, InsertOrUpdate, etc.).
+- **`queries_test.go`** — Query test cases (WHERE clause conditions, etc.).
 
 ## Running Tests
 
@@ -39,27 +39,23 @@ make test-compat
 
 ## Adding a New Test Case
 
-1. **Define DDL and test function** in `tests.go`:
+1. **Define DDL, test function, and Test function** in the appropriate `_test.go` file (`mutations_test.go` for mutation tests, `queries_test.go` for query tests):
 
 ```go
-var MyFeatureDDL = []string{
+var myFeatureDDL = []string{
     `CREATE TABLE MyTable (
         Id INT64 NOT NULL,
         Value STRING(256),
     ) PRIMARY KEY (Id)`,
 }
 
-func RunMyFeature(ctx context.Context, t *testing.T, client *spanner.Client) {
+func runMyFeature(ctx context.Context, t *testing.T, client *spanner.Client) {
     t.Helper()
     // Use client to test your feature
 }
-```
 
-2. **Add a test runner** in `compat_test.go`:
-
-```go
 func TestCompat_MyFeature(t *testing.T) {
-    compattest.RunCompat(t, compattest.MyFeatureDDL, compattest.RunMyFeature)
+    runCompat(t, myFeatureDDL, runMyFeature)
 }
 ```
 

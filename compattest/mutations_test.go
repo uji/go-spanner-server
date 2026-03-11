@@ -3,15 +3,13 @@ package compattest
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"testing"
 
 	"cloud.google.com/go/spanner"
 	"google.golang.org/api/iterator"
 )
 
-// InsertAndReadDDL is the DDL for the InsertAndRead test.
-var InsertAndReadDDL = []string{
+var insertAndReadDDL = []string{
 	`CREATE TABLE Singers (
 		SingerId INT64 NOT NULL,
 		FirstName STRING(1024),
@@ -19,18 +17,17 @@ var InsertAndReadDDL = []string{
 	) PRIMARY KEY (SingerId)`,
 }
 
-// RunInsertAndRead tests inserting and reading rows via the Spanner client.
-func RunInsertAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
+func runInsertAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
 	t.Helper()
 
 	_, err := client.Apply(ctx, []*spanner.Mutation{
 		spanner.InsertOrUpdate("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(1), "Marc", "Richards"},
+			[]any{int64(1), "Marc", "Richards"},
 		),
 		spanner.InsertOrUpdate("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(2), "Catalina", "Smith"},
+			[]any{int64(2), "Catalina", "Smith"},
 		),
 	})
 	if err != nil {
@@ -74,22 +71,24 @@ func RunInsertAndRead(ctx context.Context, t *testing.T, client *spanner.Client)
 	}
 }
 
-// UpdateAndReadDDL is the DDL for the UpdateAndRead test.
-var UpdateAndReadDDL = InsertAndReadDDL
+func TestCompat_InsertAndRead(t *testing.T) {
+	runCompat(t, insertAndReadDDL, runInsertAndRead)
+}
 
-// RunUpdateAndRead tests inserting, updating, and reading rows via the Spanner client.
-func RunUpdateAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
+var updateAndReadDDL = insertAndReadDDL
+
+func runUpdateAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
 	t.Helper()
 
 	// Insert initial rows
 	_, err := client.Apply(ctx, []*spanner.Mutation{
 		spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(1), "Marc", "Richards"},
+			[]any{int64(1), "Marc", "Richards"},
 		),
 		spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(2), "Catalina", "Smith"},
+			[]any{int64(2), "Catalina", "Smith"},
 		),
 	})
 	if err != nil {
@@ -100,7 +99,7 @@ func RunUpdateAndRead(ctx context.Context, t *testing.T, client *spanner.Client)
 	_, err = client.Apply(ctx, []*spanner.Mutation{
 		spanner.Update("Singers",
 			[]string{"SingerId", "FirstName"},
-			[]interface{}{int64(1), "Marcus"},
+			[]any{int64(1), "Marcus"},
 		),
 	})
 	if err != nil {
@@ -130,26 +129,28 @@ func RunUpdateAndRead(ctx context.Context, t *testing.T, client *spanner.Client)
 	}
 }
 
-// DeleteAndReadDDL is the DDL for the DeleteAndRead test.
-var DeleteAndReadDDL = InsertAndReadDDL
+func TestCompat_UpdateAndRead(t *testing.T) {
+	runCompat(t, updateAndReadDDL, runUpdateAndRead)
+}
 
-// RunDeleteAndRead tests inserting, deleting, and reading rows via the Spanner client.
-func RunDeleteAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
+var deleteAndReadDDL = insertAndReadDDL
+
+func runDeleteAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
 	t.Helper()
 
 	// Insert rows
 	_, err := client.Apply(ctx, []*spanner.Mutation{
 		spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(1), "Marc", "Richards"},
+			[]any{int64(1), "Marc", "Richards"},
 		),
 		spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(2), "Catalina", "Smith"},
+			[]any{int64(2), "Catalina", "Smith"},
 		),
 		spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(3), "Alice", "Trentor"},
+			[]any{int64(3), "Alice", "Trentor"},
 		),
 	})
 	if err != nil {
@@ -195,18 +196,20 @@ func RunDeleteAndRead(ctx context.Context, t *testing.T, client *spanner.Client)
 	}
 }
 
-// InsertOrUpdateExistingDDL is the DDL for the InsertOrUpdateExisting test.
-var InsertOrUpdateExistingDDL = InsertAndReadDDL
+func TestCompat_DeleteAndRead(t *testing.T) {
+	runCompat(t, deleteAndReadDDL, runDeleteAndRead)
+}
 
-// RunInsertOrUpdateExisting tests that InsertOrUpdate on an existing row updates it.
-func RunInsertOrUpdateExisting(ctx context.Context, t *testing.T, client *spanner.Client) {
+var insertOrUpdateExistingDDL = insertAndReadDDL
+
+func runInsertOrUpdateExisting(ctx context.Context, t *testing.T, client *spanner.Client) {
 	t.Helper()
 
 	// Insert initial row
 	_, err := client.Apply(ctx, []*spanner.Mutation{
 		spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(1), "Marc", "Richards"},
+			[]any{int64(1), "Marc", "Richards"},
 		),
 	})
 	if err != nil {
@@ -217,7 +220,7 @@ func RunInsertOrUpdateExisting(ctx context.Context, t *testing.T, client *spanne
 	_, err = client.Apply(ctx, []*spanner.Mutation{
 		spanner.InsertOrUpdate("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(1), "Marcus", "Johnson"},
+			[]any{int64(1), "Marcus", "Johnson"},
 		),
 	})
 	if err != nil {
@@ -242,18 +245,20 @@ func RunInsertOrUpdateExisting(ctx context.Context, t *testing.T, client *spanne
 	}
 }
 
-// ReplaceAndReadDDL is the DDL for the ReplaceAndRead test.
-var ReplaceAndReadDDL = InsertAndReadDDL
+func TestCompat_InsertOrUpdateExisting(t *testing.T) {
+	runCompat(t, insertOrUpdateExistingDDL, runInsertOrUpdateExisting)
+}
 
-// RunReplaceAndRead tests Replace on an existing row and on a new row.
-func RunReplaceAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
+var replaceAndReadDDL = insertAndReadDDL
+
+func runReplaceAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
 	t.Helper()
 
 	// Insert initial row
 	_, err := client.Apply(ctx, []*spanner.Mutation{
 		spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(1), "Marc", "Richards"},
+			[]any{int64(1), "Marc", "Richards"},
 		),
 	})
 	if err != nil {
@@ -264,7 +269,7 @@ func RunReplaceAndRead(ctx context.Context, t *testing.T, client *spanner.Client
 	_, err = client.Apply(ctx, []*spanner.Mutation{
 		spanner.Replace("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(1), "Marcus", "Johnson"},
+			[]any{int64(1), "Marcus", "Johnson"},
 		),
 	})
 	if err != nil {
@@ -275,7 +280,7 @@ func RunReplaceAndRead(ctx context.Context, t *testing.T, client *spanner.Client
 	_, err = client.Apply(ctx, []*spanner.Mutation{
 		spanner.Replace("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(2), "Alice", "Trentor"},
+			[]any{int64(2), "Alice", "Trentor"},
 		),
 	})
 	if err != nil {
@@ -321,22 +326,24 @@ func RunReplaceAndRead(ctx context.Context, t *testing.T, client *spanner.Client
 	}
 }
 
-// DeleteAllAndReadDDL is the DDL for the DeleteAllAndRead test.
-var DeleteAllAndReadDDL = InsertAndReadDDL
+func TestCompat_ReplaceAndRead(t *testing.T) {
+	runCompat(t, replaceAndReadDDL, runReplaceAndRead)
+}
 
-// RunDeleteAllAndRead tests Delete with AllKeys().
-func RunDeleteAllAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
+var deleteAllAndReadDDL = insertAndReadDDL
+
+func runDeleteAllAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
 	t.Helper()
 
 	// Insert rows
 	_, err := client.Apply(ctx, []*spanner.Mutation{
 		spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(1), "Marc", "Richards"},
+			[]any{int64(1), "Marc", "Richards"},
 		),
 		spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(2), "Catalina", "Smith"},
+			[]any{int64(2), "Catalina", "Smith"},
 		),
 	})
 	if err != nil {
@@ -374,101 +381,13 @@ func RunDeleteAllAndRead(ctx context.Context, t *testing.T, client *spanner.Clie
 	}
 }
 
-// WhereClauseDDL is the DDL for the WhereClause test.
-var WhereClauseDDL = InsertAndReadDDL
-
-// RunWhereClause tests SELECT with various WHERE conditions.
-func RunWhereClause(ctx context.Context, t *testing.T, client *spanner.Client) {
-	t.Helper()
-
-	// Insert test data (including a row with NULL LastName)
-	_, err := client.Apply(ctx, []*spanner.Mutation{
-		spanner.Insert("Singers",
-			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(1), "Marc", "Richards"},
-		),
-		spanner.Insert("Singers",
-			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(2), "Catalina", "Smith"},
-		),
-		spanner.Insert("Singers",
-			[]string{"SingerId", "FirstName"},
-			[]interface{}{int64(3), "Alice"},
-		),
-		spanner.Insert("Singers",
-			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{int64(4), "Maria", "Garcia"},
-		),
-	})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-
-	tests := []struct {
-		name string
-		sql  string
-		want []int64
-	}{
-		{
-			name: "equal",
-			sql:  "SELECT SingerId FROM Singers WHERE SingerId = 1",
-			want: []int64{1},
-		},
-		{
-			name: "range_and",
-			sql:  "SELECT SingerId FROM Singers WHERE SingerId > 1 AND SingerId < 4 ORDER BY SingerId",
-			want: []int64{2, 3},
-		},
-		{
-			name: "like",
-			sql:  "SELECT SingerId FROM Singers WHERE FirstName LIKE 'Ma%' ORDER BY SingerId",
-			want: []int64{1, 4},
-		},
-		{
-			name: "in",
-			sql:  "SELECT SingerId FROM Singers WHERE SingerId IN (1, 3) ORDER BY SingerId",
-			want: []int64{1, 3},
-		},
-		{
-			name: "is_null",
-			sql:  "SELECT SingerId FROM Singers WHERE LastName IS NULL",
-			want: []int64{3},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			iter := client.Single().Query(ctx, spanner.NewStatement(tt.sql))
-			defer iter.Stop()
-
-			var ids []int64
-			for {
-				row, err := iter.Next()
-				if err == iterator.Done {
-					break
-				}
-				if err != nil {
-					t.Fatalf("query %q failed: %v", tt.sql, err)
-				}
-				var id int64
-				if err := row.Columns(&id); err != nil {
-					t.Fatalf("scan failed: %v", err)
-				}
-				ids = append(ids, id)
-			}
-
-			if !reflect.DeepEqual(ids, tt.want) {
-				t.Errorf("query %q: got %v, want %v", tt.sql, ids, tt.want)
-			}
-		})
-	}
+func TestCompat_DeleteAllAndRead(t *testing.T) {
+	runCompat(t, deleteAllAndReadDDL, runDeleteAllAndRead)
 }
 
-// DeleteByRangeAndReadDDL is the DDL for the DeleteByRangeAndRead test.
-var DeleteByRangeAndReadDDL = InsertAndReadDDL
+var deleteByRangeAndReadDDL = insertAndReadDDL
 
-// RunDeleteByRangeAndRead tests Delete with a KeyRange.
-func RunDeleteByRangeAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
+func runDeleteByRangeAndRead(ctx context.Context, t *testing.T, client *spanner.Client) {
 	t.Helper()
 
 	// Insert rows with IDs 1-5
@@ -476,7 +395,7 @@ func RunDeleteByRangeAndRead(ctx context.Context, t *testing.T, client *spanner.
 	for i := int64(1); i <= 5; i++ {
 		mutations = append(mutations, spanner.Insert("Singers",
 			[]string{"SingerId", "FirstName", "LastName"},
-			[]interface{}{i, fmt.Sprintf("First%d", i), fmt.Sprintf("Last%d", i)},
+			[]any{i, fmt.Sprintf("First%d", i), fmt.Sprintf("Last%d", i)},
 		))
 	}
 	_, err := client.Apply(ctx, mutations)
@@ -525,4 +444,8 @@ func RunDeleteByRangeAndRead(ctx context.Context, t *testing.T, client *spanner.
 	if ids[0] != 1 || ids[1] != 5 {
 		t.Errorf("expected ids [1,5], got %v", ids)
 	}
+}
+
+func TestCompat_DeleteByRangeAndRead(t *testing.T) {
+	runCompat(t, deleteByRangeAndReadDDL, runDeleteByRangeAndRead)
 }

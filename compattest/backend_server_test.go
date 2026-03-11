@@ -64,6 +64,7 @@ func (b *serverBackend) Setup(ctx context.Context, t *testing.T, ddl []string) (
 
 	cleanup := func() {
 		client.Close()
+		adminClient.Close()
 		conn.Close()
 		srv.Stop()
 	}
