@@ -31,16 +31,15 @@ func TestCompat_CreateIndexAndReadByIndex(t *testing.T) {
 			t.Fatalf("failed to insert: %v", err)
 		}
 
-		// ReadUsingIndex with key lookup
+		// ReadUsingIndex with key lookup (only index key + PK columns are readable)
 		iter := client.Single().ReadUsingIndex(ctx, "Songs", "SongsByGenre",
 			spanner.KeySets(spanner.Key{"Pop"}),
-			[]string{"SongId", "Title", "Genre"},
+			[]string{"SongId", "Genre"},
 		)
 		defer iter.Stop()
 
 		type Song struct {
 			SongId int64
-			Title  string
 			Genre  string
 		}
 		var songs []Song
@@ -53,7 +52,7 @@ func TestCompat_CreateIndexAndReadByIndex(t *testing.T) {
 				t.Fatalf("failed to read: %v", err)
 			}
 			var s Song
-			if err := row.Columns(&s.SongId, &s.Title, &s.Genre); err != nil {
+			if err := row.Columns(&s.SongId, &s.Genre); err != nil {
 				t.Fatalf("failed to scan: %v", err)
 			}
 			songs = append(songs, s)
