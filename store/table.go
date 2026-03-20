@@ -20,6 +20,7 @@ type Table struct {
 	ColIndex map[string]int // column name → index
 	PKCols   []int          // primary key column indexes
 	Rows     *btree.BTreeG[Row]
+	Indexes  map[string]*Index
 }
 
 // NewTable creates a new empty table.
@@ -34,6 +35,7 @@ func NewTable(name string, cols []ColInfo, pkCols []int) *Table {
 		Cols:     cols,
 		ColIndex: colIndex,
 		PKCols:   pkCols,
+		Indexes:  make(map[string]*Index),
 	}
 
 	t.Rows = btree.NewG(2, func(a, b Row) bool {
@@ -74,6 +76,9 @@ func (t *Table) InsertRow(cols []string, vals []any) error {
 		return fmt.Errorf("row already exists with given primary key in table %q", t.Name)
 	}
 
+	if err := t.updateIndexesOnInsert(row); err != nil {
+		return err
+	}
 	t.Rows.ReplaceOrInsert(row)
 	return nil
 }
@@ -104,7 +109,11 @@ func (t *Table) UpdateRow(cols []string, vals []any) error {
 		merged[idx] = vals[i]
 	}
 
-	t.Rows.ReplaceOrInsert(Row{Data: merged})
+	newRow := Row{Data: merged}
+	if err := t.updateIndexesOnUpdate(existing, newRow); err != nil {
+		return err
+	}
+	t.Rows.ReplaceOrInsert(newRow)
 	return nil
 }
 
@@ -119,12 +128,25 @@ func (t *Table) ReplaceRow(cols []string, vals []any) error {
 		data[idx] = vals[i]
 	}
 
-	t.Rows.ReplaceOrInsert(Row{Data: data})
+	newRow := Row{Data: data}
+	if old, ok := t.Rows.Get(newRow); ok {
+		if err := t.updateIndexesOnUpdate(old, newRow); err != nil {
+			return err
+		}
+	} else {
+		if err := t.updateIndexesOnInsert(newRow); err != nil {
+			return err
+		}
+	}
+	t.Rows.ReplaceOrInsert(newRow)
 	return nil
 }
 
 // DeleteAll removes all rows from the table.
 func (t *Table) DeleteAll() {
+	for _, idx := range t.Indexes {
+		idx.Rows.Clear(false)
+	}
 	t.Rows.Clear(false)
 }
 
@@ -138,7 +160,9 @@ func (t *Table) DeleteByKeys(keys [][]any) {
 				probe.Data[pk] = key[i]
 			}
 		}
-		t.Rows.Delete(probe)
+		if old, ok := t.Rows.Delete(probe); ok {
+			t.updateIndexesOnDelete(old)
+		}
 	}
 }
 
@@ -189,6 +213,7 @@ func (t *Table) DeleteByRange(startKey, endKey []any, startClosed, endClosed boo
 
 	for _, r := range toDelete {
 		t.Rows.Delete(r)
+		t.updateIndexesOnDelete(r)
 	}
 }
 
@@ -289,4 +314,43 @@ func (t *Table) ResolveColumnIndexes(cols []string) ([]int, error) {
 		indexes[i] = idx
 	}
 	return indexes, nil
+}
+
+func (t *Table) updateIndexesOnInsert(newRow Row) error {
+	for _, idx := range t.Indexes {
+		if err := idx.Insert(newRow); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Table) updateIndexesOnDelete(oldRow Row) {
+	for _, idx := range t.Indexes {
+		idx.Delete(oldRow)
+	}
+}
+
+func (t *Table) updateIndexesOnUpdate(oldRow, newRow Row) error {
+	// Pre-validate UNIQUE constraints before modifying any index.
+	for _, idx := range t.Indexes {
+		if !idx.Unique {
+			continue
+		}
+		if idx.NullFiltered && idx.HasNullKey(newRow) {
+			continue
+		}
+		indexRow := idx.BuildIndexRow(newRow)
+		oldIndexRow := idx.BuildIndexRow(oldRow)
+		// Temporarily remove the old row to check if the new row conflicts with other entries.
+		idx.Rows.Delete(oldIndexRow)
+		err := idx.checkUnique(indexRow)
+		// Restore the old row regardless of the result.
+		idx.Rows.ReplaceOrInsert(oldIndexRow)
+		if err != nil {
+			return err
+		}
+	}
+	t.updateIndexesOnDelete(oldRow)
+	return t.updateIndexesOnInsert(newRow)
 }

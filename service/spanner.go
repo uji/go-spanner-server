@@ -311,7 +311,12 @@ func (s *SpannerServer) StreamingRead(req *sppb.ReadRequest, stream sppb.Spanner
 
 	// Read rows based on KeySet
 	var rows []store.Row
-	if req.KeySet != nil {
+	if req.Index != "" {
+		rows, err = s.readUsingIndex(table, req, colIndexes)
+		if err != nil {
+			return err
+		}
+	} else if req.KeySet != nil {
 		if req.KeySet.All {
 			rows = table.ReadAll(colIndexes)
 		} else if len(req.KeySet.Keys) > 0 {
@@ -353,6 +358,83 @@ func (s *SpannerServer) StreamingRead(req *sppb.ReadRequest, stream sppb.Spanner
 		Values:   values,
 	}
 	return stream.Send(prs)
+}
+
+func (s *SpannerServer) readUsingIndex(table *store.Table, req *sppb.ReadRequest, colIndexes []int) ([]store.Row, error) {
+	idx, ok := table.Indexes[req.Index]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "index %q not found on table %q", req.Index, req.Table)
+	}
+
+	var rows []store.Row
+	if req.KeySet != nil {
+		if req.KeySet.All {
+			rows = idx.ReadAll(table, colIndexes)
+		} else if len(req.KeySet.Keys) > 0 {
+			keys := make([][]any, len(req.KeySet.Keys))
+			for i, k := range req.KeySet.Keys {
+				keyVals := make([]any, len(k.Values))
+				idxKeyCols := idx.IndexKeyCols()
+				for j, v := range k.Values {
+					colIdx := idxKeyCols[j]
+					decoded, err := store.DecodeValue(v, table.Cols[colIdx].Type)
+					if err != nil {
+						return nil, status.Errorf(codes.InvalidArgument, "decode index key: %v", err)
+					}
+					keyVals[j] = decoded
+				}
+				keys[i] = keyVals
+			}
+			rows = idx.ReadByKeys(table, keys, colIndexes)
+		} else if len(req.KeySet.Ranges) > 0 {
+			idxKeyCols := idx.IndexKeyCols()
+			for _, kr := range req.KeySet.Ranges {
+				startKey, startClosed := decodeIndexKeyRangeStart(kr, table, idxKeyCols)
+				endKey, endClosed := decodeIndexKeyRangeEnd(kr, table, idxKeyCols)
+				rangeRows := idx.ReadByRange(table, startKey, endKey, startClosed, endClosed, colIndexes)
+				rows = append(rows, rangeRows...)
+			}
+		}
+	}
+	return rows, nil
+}
+
+func decodeIndexKeyRangeStart(kr *sppb.KeyRange, table *store.Table, idxKeyCols []int) ([]any, bool) {
+	switch s := kr.StartKeyType.(type) {
+	case *sppb.KeyRange_StartClosed:
+		return decodeIndexKeyValues(s.StartClosed, table, idxKeyCols), true
+	case *sppb.KeyRange_StartOpen:
+		return decodeIndexKeyValues(s.StartOpen, table, idxKeyCols), false
+	default:
+		return nil, true
+	}
+}
+
+func decodeIndexKeyRangeEnd(kr *sppb.KeyRange, table *store.Table, idxKeyCols []int) ([]any, bool) {
+	switch e := kr.EndKeyType.(type) {
+	case *sppb.KeyRange_EndClosed:
+		return decodeIndexKeyValues(e.EndClosed, table, idxKeyCols), true
+	case *sppb.KeyRange_EndOpen:
+		return decodeIndexKeyValues(e.EndOpen, table, idxKeyCols), false
+	default:
+		return nil, true
+	}
+}
+
+func decodeIndexKeyValues(lv *structpb.ListValue, table *store.Table, idxKeyCols []int) []any {
+	if lv == nil {
+		return nil
+	}
+	vals := make([]any, len(lv.Values))
+	for i, v := range lv.Values {
+		if i >= len(idxKeyCols) {
+			break
+		}
+		colIdx := idxKeyCols[i]
+		decoded, _ := store.DecodeValue(v, table.Cols[colIdx].Type)
+		vals[i] = decoded
+	}
+	return vals
 }
 
 func decodeKeyRangeStart(kr *sppb.KeyRange, table *store.Table) ([]any, bool) {
