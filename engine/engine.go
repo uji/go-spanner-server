@@ -262,7 +262,7 @@ func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
 		col := table.Cols[idx]
 		result.Columns = append(result.Columns, &sppb.StructType_Field{
 			Name: colNames[i],
-			Type: &sppb.Type{Code: store.TypeCodeFromDDL(col.Type)},
+			Type: store.SpannerType(col.Type),
 		})
 	}
 

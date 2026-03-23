@@ -54,11 +54,11 @@ func (db *Database) applyCreateTable(ct *ast.CreateTable, rawSQL string) error {
 
 	var cols []ColInfo
 	for _, colDef := range ct.Columns {
-		typeName := extractTypeName(colDef.Type)
+		colType := extractColType(colDef.Type)
 		notNull := colDef.NotNull
 		cols = append(cols, ColInfo{
 			Name:    colDef.Name.Name,
-			Type:    typeName,
+			Type:    colType,
 			NotNull: notNull,
 		})
 	}
@@ -164,14 +164,17 @@ func (db *Database) applyDropIndex(di *ast.DropIndex, rawSQL string) error {
 	return fmt.Errorf("index %q not found", indexName)
 }
 
-func extractTypeName(typ ast.SchemaType) string {
+func extractColType(typ ast.SchemaType) ColType {
 	switch t := typ.(type) {
 	case *ast.ScalarSchemaType:
-		return strings.ToUpper(string(t.Name))
+		return ScalarColType(strings.ToUpper(string(t.Name)))
 	case *ast.SizedSchemaType:
-		return strings.ToUpper(string(t.Name))
+		return ScalarColType(strings.ToUpper(string(t.Name)))
+	case *ast.ArraySchemaType:
+		elem := extractColType(t.Item)
+		return ColType{Name: TypeArray, ArrayElem: &elem}
 	default:
-		return "STRING"
+		return ScalarColType(TypeString)
 	}
 }
 

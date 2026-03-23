@@ -6,10 +6,28 @@ import (
 	"github.com/google/btree"
 )
 
+// ColType describes a Spanner column type, supporting nested ARRAY and STRUCT types.
+type ColType struct {
+	Name         string         // "INT64", "STRING", "ARRAY", "STRUCT", etc.
+	ArrayElem    *ColType       // set when Name == "ARRAY"
+	StructFields []ColTypeField // set when Name == "STRUCT"
+}
+
+// ColTypeField is a named field within a STRUCT type.
+type ColTypeField struct {
+	Name string
+	Type ColType
+}
+
+// ScalarColType returns a ColType for a scalar type name.
+func ScalarColType(name string) ColType {
+	return ColType{Name: name}
+}
+
 // ColInfo describes a column.
 type ColInfo struct {
 	Name    string
-	Type    string
+	Type    ColType
 	NotNull bool
 }
 
