@@ -302,7 +302,7 @@ func (s *SpannerServer) StreamingRead(req *sppb.ReadRequest, stream sppb.Spanner
 		col := table.Cols[idx]
 		fields[i] = &sppb.StructType_Field{
 			Name: req.Columns[i],
-			Type: &sppb.Type{Code: store.TypeCodeFromDDL(col.Type)},
+			Type: store.SpannerType(col.Type),
 		}
 	}
 	metadata := &sppb.ResultSetMetadata{
