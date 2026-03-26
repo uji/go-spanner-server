@@ -1,6 +1,7 @@
 # go-spanner-server
 
 An in-process, in-memory Cloud Spanner compatible server written in pure Go.
+(inspired by https://github.com/dolthub/go-mysql-server)
 
 This library provides a lightweight pure Go alternative that works directly with the `cloud.google.com/go/spanner` client library.
 
