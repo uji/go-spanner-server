@@ -1,7 +1,4 @@
-.PHONY: test test-compat test-all lint
-
-test:
-	go test ./... -v
+.PHONY: test-compat
 
 test-compat:
 	docker run -d --name spanner-emulator -p 9010:9010 -p 9020:9020 gcr.io/cloud-spanner-emulator/emulator
@@ -10,8 +7,3 @@ test-compat:
 	status=$$?; \
 	docker stop spanner-emulator && docker rm spanner-emulator; \
 	exit $$status
-
-test-all: test test-compat
-
-lint:
-	go vet ./...
