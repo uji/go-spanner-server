@@ -241,15 +241,39 @@ func (s *SpannerServer) ExecuteSql(ctx context.Context, req *sppb.ExecuteSqlRequ
 	}
 
 	if isDML(req.Sql) {
+		// Handle inline begin: the client may embed BeginTransaction in the first RPC
+		// to save a round-trip. Begin a transaction and return its ID so the client
+		// does not treat the missing ID as a failure and retry.
+		var inlineTxID []byte
+		if sel, ok := req.Transaction.GetSelector().(*sppb.TransactionSelector_Begin); ok {
+			readOnly := false
+			if sel.Begin != nil {
+				if _, ok := sel.Begin.Mode.(*sppb.TransactionOptions_ReadOnly_); ok {
+					readOnly = true
+				}
+			}
+			tx, err := s.sessions.BeginTransaction(req.Session, readOnly)
+			if err != nil {
+				return nil, status.Errorf(codes.NotFound, "%v", err)
+			}
+			inlineTxID = tx.ID
+		}
+
 		rowCount, err := engine.ExecuteDML(db, req.Sql)
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "execute DML: %v", err)
 		}
-		return &sppb.ResultSet{
+		rs := &sppb.ResultSet{
 			Stats: &sppb.ResultSetStats{
 				RowCount: &sppb.ResultSetStats_RowCountExact{RowCountExact: rowCount},
 			},
-		}, nil
+		}
+		if inlineTxID != nil {
+			rs.Metadata = &sppb.ResultSetMetadata{
+				Transaction: &sppb.Transaction{Id: inlineTxID},
+			}
+		}
+		return rs, nil
 	}
 
 	result, err := engine.Execute(db, req.Sql)

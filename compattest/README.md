@@ -5,7 +5,7 @@ This package provides a dual-backend compatibility testing framework for go-span
 ## Architecture
 
 - **`helper_test.go`** — `testBackend` interface, `runCompat` helper, and both backend implementations (go-spanner-server and Cloud Spanner Emulator).
-- **`testcase_test.go`** — Data-driven test framework: txtar parser, SQL-to-mutation converter, query runner, and result formatter.
+- **`testcase_test.go`** — Data-driven test framework: txtar parser, DML executor, query runner, and result formatter.
 - **`testdata/`** — Data-driven test case files in txtar format (`.sql` extension). Adding a file here automatically adds a test case.
 - **`mutations_test.go`** — Mutation API test cases (Insert, Update, Delete, Replace, InsertOrUpdate, etc.).
 - **`queries_test.go`** — Query test cases. Discovers and runs all files in `testdata/queries/*.sql`.
@@ -48,26 +48,26 @@ Create a `.sql` file in `testdata/queries/`. The file is picked up automatically
 ```
 Any comment line
 
--- ddl --
+-- ddl.sql --
 CREATE TABLE MyTable (
     Id    INT64 NOT NULL,
     Value STRING(256),
 ) PRIMARY KEY (Id)
 
--- exec --
+-- dml.sql --
 INSERT INTO MyTable (Id, Value) VALUES (1, 'hello');
 INSERT INTO MyTable (Id, Value) VALUES (2, 'world')
 
--- query --
+-- query.sql --
 SELECT Id, Value FROM MyTable WHERE Id = 1
 
--- expect --
+-- expect.out --
 (1, "hello")
 
--- query --
+-- query.sql --
 SELECT Id FROM MyTable ORDER BY Id
 
--- expect --
+-- expect.out --
 (1)
 (2)
 ```
@@ -76,10 +76,10 @@ SELECT Id FROM MyTable ORDER BY Id
 
 | Section | Description |
 |---------|-------------|
-| `-- ddl --` | DDL statements separated by `;`. Applied before the test runs. |
-| `-- exec --` | INSERT statements separated by `;`. Converted to Spanner mutations and applied via `client.Apply()`. Supports `INSERT` and `INSERT OR UPDATE`. Each statement must have exactly one `VALUES` row. |
-| `-- query --` | A SELECT statement to execute. |
-| `-- expect --` | Expected rows for the preceding `query`, one row per line in `(val1, val2, ...)` format. Values: integers as `1`, strings as `"text"`, NULL as `NULL`. |
+| `-- ddl.sql --` | DDL statements separated by `;`. Applied before the test runs. |
+| `-- dml.sql --` | DML statements (INSERT/UPDATE/DELETE) separated by `;`. Executed in a read-write transaction. |
+| `-- query.sql --` | A SELECT statement to execute. |
+| `-- expect.out --` | Expected rows for the preceding `query.sql`, one row per line in `(val1, val2, ...)` format. Values: integers as `1`, strings as `"text"`, NULL as `NULL`. |
 
 Multiple `query` / `expect` pairs can appear in one file, executed in order.
 

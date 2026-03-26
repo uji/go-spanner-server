@@ -9,8 +9,6 @@ import (
 
 	"cloud.google.com/go/spanner"
 	sppb "cloud.google.com/go/spanner/apiv1/spannerpb"
-	"github.com/cloudspannerecosystem/memefish"
-	"github.com/cloudspannerecosystem/memefish/ast"
 	structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -76,85 +74,6 @@ func ExtractDDL(sections []Section) []string {
 	return ddl
 }
 
-// SQLToMutation converts an INSERT statement into a spanner.Mutation.
-// INSERT OR UPDATE becomes an InsertOrUpdate mutation.
-func SQLToMutation(sql string) (*spanner.Mutation, error) {
-	dml, err := memefish.ParseDML("", sql)
-	if err != nil {
-		return nil, fmt.Errorf("parse DML: %w", err)
-	}
-	ins, ok := dml.(*ast.Insert)
-	if !ok {
-		return nil, fmt.Errorf("only INSERT is supported in exec.sql section, got %T", dml)
-	}
-
-	tableName := ins.TableName.Idents[0].Name
-	cols := make([]string, len(ins.Columns))
-	for i, col := range ins.Columns {
-		cols[i] = col.Name
-	}
-
-	input, ok := ins.Input.(*ast.ValuesInput)
-	if !ok {
-		return nil, fmt.Errorf("only VALUES input is supported in exec.sql section")
-	}
-	if len(input.Rows) != 1 {
-		return nil, fmt.Errorf("each INSERT in exec.sql section must have exactly one VALUES row; got %d", len(input.Rows))
-	}
-
-	vals := make([]any, len(input.Rows[0].Exprs))
-	for i, expr := range input.Rows[0].Exprs {
-		v, err := evalExprLiteral(expr.Expr)
-		if err != nil {
-			return nil, fmt.Errorf("col %s: %w", cols[i], err)
-		}
-		vals[i] = v
-	}
-
-	if ins.InsertOrType == ast.InsertOrTypeUpdate {
-		return spanner.InsertOrUpdate(tableName, cols, vals), nil
-	}
-	return spanner.Insert(tableName, cols, vals), nil
-}
-
-func evalExprLiteral(expr ast.Expr) (any, error) {
-	switch e := expr.(type) {
-	case *ast.IntLiteral:
-		v, err := strconv.ParseInt(e.Value, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse int %q: %w", e.Value, err)
-		}
-		return v, nil
-	case *ast.StringLiteral:
-		return e.Value, nil
-	case *ast.NullLiteral:
-		return nil, nil
-	case *ast.BoolLiteral:
-		return e.Value, nil
-	case *ast.FloatLiteral:
-		v, err := strconv.ParseFloat(e.Value, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse float %q: %w", e.Value, err)
-		}
-		return v, nil
-	case *ast.UnaryExpr:
-		inner, err := evalExprLiteral(e.Expr)
-		if err != nil {
-			return nil, err
-		}
-		if e.Op == ast.OpMinus {
-			switch v := inner.(type) {
-			case int64:
-				return -v, nil
-			case float64:
-				return -v, nil
-			}
-		}
-		return nil, fmt.Errorf("unsupported unary op %q on %T", e.Op, inner)
-	default:
-		return nil, fmt.Errorf("unsupported expression type: %T", expr)
-	}
-}
 
 // FormatRow formats a spanner.Row as a "(val1, val2, ...)" string.
 func FormatRow(row *spanner.Row) string {
@@ -223,7 +142,7 @@ func ParseExpectLines(s string) []string {
 }
 
 // RunSections executes parsed sections in order.
-// The ddl.sql section is already handled by the caller; this function processes exec.sql/query.sql/expect.out.
+// The ddl.sql section is already handled by the caller; this function processes dml.sql/query.sql/expect.out.
 func RunSections(ctx context.Context, t *testing.T, client *spanner.Client, sections []Section) {
 	t.Helper()
 
@@ -234,19 +153,19 @@ func RunSections(ctx context.Context, t *testing.T, client *spanner.Client, sect
 		switch sec.Name {
 		case "ddl.sql":
 			// Passed as a DDL argument to the caller; no processing here.
-		case "exec.sql":
-			// Convert INSERT statements to Mutations and apply via client.Apply().
+		case "dml.sql":
+			// Execute DML statements in a read-write transaction.
 			stmts := SplitStatements(sec.Content)
-			mutations := make([]*spanner.Mutation, 0, len(stmts))
-			for _, stmt := range stmts {
-				m, err := SQLToMutation(stmt)
-				if err != nil {
-					t.Fatalf("exec.sql: %v", err)
+			_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
+				for _, stmt := range stmts {
+					if _, err := tx.Update(ctx, spanner.NewStatement(stmt)); err != nil {
+						return err
+					}
 				}
-				mutations = append(mutations, m)
-			}
-			if _, err := client.Apply(ctx, mutations); err != nil {
-				t.Fatalf("exec.sql apply failed: %v", err)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("dml.sql failed: %v", err)
 			}
 		case "query.sql":
 			// Error if the previous query's expect has not been verified.

@@ -7,7 +7,7 @@ CREATE TABLE Singers (
     LastName STRING(1024),
 ) PRIMARY KEY (SingerId)
 
--- exec.sql --
+-- dml.sql --
 INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (1, 'Marc', 'Richards');
 INSERT INTO Singers (SingerId, FirstName, LastName) VALUES (2, 'Catalina', 'Smith');
 INSERT INTO Singers (SingerId, FirstName) VALUES (3, 'Alice');
