@@ -240,6 +240,18 @@ func (s *SpannerServer) ExecuteSql(ctx context.Context, req *sppb.ExecuteSqlRequ
 		return nil, err
 	}
 
+	if isDML(req.Sql) {
+		rowCount, err := engine.ExecuteDML(db, req.Sql)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "execute DML: %v", err)
+		}
+		return &sppb.ResultSet{
+			Stats: &sppb.ResultSetStats{
+				RowCount: &sppb.ResultSetStats_RowCountExact{RowCountExact: rowCount},
+			},
+		}, nil
+	}
+
 	result, err := engine.Execute(db, req.Sql)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "execute SQL: %v", err)
@@ -252,6 +264,19 @@ func (s *SpannerServer) ExecuteSql(ctx context.Context, req *sppb.ExecuteSqlRequ
 		Rows: result.Rows,
 	}
 	return rs, nil
+}
+
+// isDML reports whether sql is a DML statement (INSERT, UPDATE, DELETE).
+func isDML(sql string) bool {
+	fields := strings.Fields(strings.TrimSpace(sql))
+	if len(fields) == 0 {
+		return false
+	}
+	switch strings.ToUpper(fields[0]) {
+	case "INSERT", "UPDATE", "DELETE":
+		return true
+	}
+	return false
 }
 
 func (s *SpannerServer) ExecuteStreamingSql(req *sppb.ExecuteSqlRequest, stream sppb.Spanner_ExecuteStreamingSqlServer) error {

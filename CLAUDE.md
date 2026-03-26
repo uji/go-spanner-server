@@ -5,15 +5,15 @@
 
 ## Development Commands
 
-### フォーマット・静的解析
+### Format & Lint
 ```bash
-go fmt ./...       # コードフォーマット
-go vet ./...       # 静的解析
-go fix ./...       # 古いAPIの自動修正
+go fmt ./...       # format code
+go vet ./...       # static analysis
+go fix ./...       # auto-fix deprecated API usage
 ```
 
-### テスト
+### Test
 ```bash
-go test ./... -v   # ユニットテスト
-make test-compat   # 互換性テスト（Spanner Emulatorが必要、Dockerで自動起動）
+go test ./... -v   # unit tests
+make test-compat   # compatibility tests (requires Spanner Emulator, auto-started via Docker)
 ```
