@@ -4,9 +4,7 @@ This package provides a dual-backend compatibility testing framework for go-span
 
 ## Architecture
 
-- **`helper_test.go`** — `testBackend` interface and `runCompat` helper that runs tests against all available backends.
-- **`backend_server_test.go`** — In-process go-spanner-server backend using bufconn. Always available.
-- **`backend_emulator_test.go`** — Cloud Spanner Emulator backend. Activated when `SPANNER_EMULATOR_HOST` is set.
+- **`helper_test.go`** — `testBackend` interface, `runCompat` helper, and both backend implementations (go-spanner-server and Cloud Spanner Emulator).
 - **`mutations_test.go`** — Mutation test cases (Insert, Update, Delete, Replace, InsertOrUpdate, etc.).
 - **`queries_test.go`** — Query test cases (WHERE clause conditions, etc.).
 
