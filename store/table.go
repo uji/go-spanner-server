@@ -31,6 +31,16 @@ type ColInfo struct {
 	NotNull bool
 }
 
+// OnDeleteAction specifies the action when a parent row is deleted.
+type OnDeleteAction int
+
+const (
+	// OnDeleteNoAction is the default: deleting a parent row fails if child rows exist.
+	OnDeleteNoAction OnDeleteAction = iota
+	// OnDeleteCascade automatically deletes child rows when the parent row is deleted.
+	OnDeleteCascade
+)
+
 // Table represents an in-memory Spanner table.
 type Table struct {
 	Name     string
@@ -39,6 +49,11 @@ type Table struct {
 	PKCols   []int          // primary key column indexes
 	Rows     *btree.BTreeG[Row]
 	Indexes  map[string]*Index
+
+	// Interleave fields
+	ParentTableName string         // empty if this is a root table
+	OnDelete        OnDeleteAction // action when parent row is deleted
+	ChildTables     []*Table       // tables interleaved in this table
 }
 
 // NewTable creates a new empty table.

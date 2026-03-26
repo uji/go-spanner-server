@@ -40,6 +40,8 @@ func (db *Database) ApplyDDL(sql string) error {
 		return db.applyCreateIndex(s, sql)
 	case *ast.DropIndex:
 		return db.applyDropIndex(s, sql)
+	case *ast.DropTable:
+		return db.applyDropTable(s, sql)
 	default:
 		return fmt.Errorf("unsupported DDL statement: %T", stmt)
 	}
@@ -81,8 +83,46 @@ func (db *Database) applyCreateTable(ct *ast.CreateTable, rawSQL string) error {
 		}
 	}
 
-	db.Tables[tableName] = NewTable(tableName, cols, pkCols)
+	table := NewTable(tableName, cols, pkCols)
+
+	if ct.Cluster != nil {
+		parentName := ct.Cluster.TableName.Idents[0].Name
+		parentTable, ok := db.Tables[parentName]
+		if !ok {
+			return fmt.Errorf("parent table %q not found", parentName)
+		}
+		if err := validateInterleave(parentTable, table); err != nil {
+			return err
+		}
+		table.ParentTableName = parentName
+		if ct.Cluster.OnDelete == ast.OnDeleteCascade {
+			table.OnDelete = OnDeleteCascade
+		} else {
+			table.OnDelete = OnDeleteNoAction
+		}
+		parentTable.ChildTables = append(parentTable.ChildTables, table)
+	}
+
+	db.Tables[tableName] = table
 	db.DDLs = append(db.DDLs, rawSQL)
+	return nil
+}
+
+func validateInterleave(parent, child *Table) error {
+	if len(child.PKCols) <= len(parent.PKCols) {
+		return fmt.Errorf("child table %q primary key must have more columns than parent %q", child.Name, parent.Name)
+	}
+	for i, parentPKIdx := range parent.PKCols {
+		childPKIdx := child.PKCols[i]
+		parentCol := parent.Cols[parentPKIdx]
+		childCol := child.Cols[childPKIdx]
+		if parentCol.Name != childCol.Name {
+			return fmt.Errorf("child primary key column %d must be %q (same as parent), got %q", i, parentCol.Name, childCol.Name)
+		}
+		if parentCol.Type.Name != childCol.Type.Name {
+			return fmt.Errorf("child primary key column %q type must match parent: parent=%s, child=%s", childCol.Name, parentCol.Type.Name, childCol.Type.Name)
+		}
+	}
 	return nil
 }
 
@@ -143,6 +183,42 @@ func (db *Database) applyCreateIndex(ci *ast.CreateIndex, rawSQL string) error {
 	}
 
 	table.Indexes[indexName] = idx
+	db.DDLs = append(db.DDLs, rawSQL)
+	return nil
+}
+
+func (db *Database) applyDropTable(dt *ast.DropTable, rawSQL string) error {
+	tableName := dt.Name.Idents[0].Name
+
+	table, ok := db.Tables[tableName]
+	if !ok {
+		if dt.IfExists {
+			return nil
+		}
+		return fmt.Errorf("table %q not found", tableName)
+	}
+
+	if len(table.ChildTables) > 0 {
+		childNames := make([]string, len(table.ChildTables))
+		for i, c := range table.ChildTables {
+			childNames[i] = c.Name
+		}
+		return fmt.Errorf("cannot drop table %q: interleaved child tables exist: %v", tableName, childNames)
+	}
+
+	// Remove from parent's ChildTables
+	if table.ParentTableName != "" {
+		if parent, ok := db.Tables[table.ParentTableName]; ok {
+			for i, c := range parent.ChildTables {
+				if c.Name == tableName {
+					parent.ChildTables = append(parent.ChildTables[:i], parent.ChildTables[i+1:]...)
+					break
+				}
+			}
+		}
+	}
+
+	delete(db.Tables, tableName)
 	db.DDLs = append(db.DDLs, rawSQL)
 	return nil
 }

@@ -153,7 +153,7 @@ func (s *SpannerServer) applyInsert(db *store.Database, write *sppb.Mutation_Wri
 		return err
 	}
 	for _, vals := range rows {
-		if err := table.InsertRow(cols, vals); err != nil {
+		if err := db.InsertRow(table, cols, vals); err != nil {
 			return err
 		}
 	}
@@ -179,7 +179,7 @@ func (s *SpannerServer) applyReplace(db *store.Database, write *sppb.Mutation_Wr
 		return err
 	}
 	for _, vals := range rows {
-		if err := table.ReplaceRow(cols, vals); err != nil {
+		if err := db.ReplaceRow(table, cols, vals); err != nil {
 			return err
 		}
 	}
@@ -194,8 +194,7 @@ func (s *SpannerServer) applyDelete(db *store.Database, del *sppb.Mutation_Delet
 
 	ks := del.KeySet
 	if ks.All {
-		table.DeleteAll()
-		return nil
+		return db.DeleteAll(table)
 	}
 
 	if len(ks.Keys) > 0 {
@@ -212,14 +211,18 @@ func (s *SpannerServer) applyDelete(db *store.Database, del *sppb.Mutation_Delet
 			}
 			keys[i] = keyVals
 		}
-		table.DeleteByKeys(keys)
+		if err := db.DeleteByKeys(table, keys); err != nil {
+			return err
+		}
 	}
 
 	if len(ks.Ranges) > 0 {
 		for _, kr := range ks.Ranges {
 			startKey, startClosed := decodeKeyRangeStart(kr, table)
 			endKey, endClosed := decodeKeyRangeEnd(kr, table)
-			table.DeleteByRange(startKey, endKey, startClosed, endClosed)
+			if err := db.DeleteByRange(table, startKey, endKey, startClosed, endClosed); err != nil {
+				return err
+			}
 		}
 	}
 
