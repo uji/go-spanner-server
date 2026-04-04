@@ -41,6 +41,23 @@ const (
 	OnDeleteCascade
 )
 
+// ForeignKeyConstraint represents a foreign key constraint on a table.
+type ForeignKeyConstraint struct {
+	Name             string         // constraint name
+	Columns          []int          // column indexes in the referencing (child) table
+	ReferenceTable   string         // name of the referenced (parent) table
+	ReferenceColumns []int          // column indexes in the referenced (parent) table
+	OnDelete         OnDeleteAction // action when referenced row is deleted
+	Enforced         bool           // if false, constraint is stored but not validated
+}
+
+// ForeignKeyRef is a back-reference from a referenced table to its referencing constraints.
+type ForeignKeyRef struct {
+	ConstraintName string
+	ChildTable     *Table
+	ConstraintIdx  int // index into ChildTable.ForeignKeys
+}
+
 // Table represents an in-memory Spanner table.
 type Table struct {
 	Name     string
@@ -54,6 +71,10 @@ type Table struct {
 	ParentTableName string         // empty if this is a root table
 	OnDelete        OnDeleteAction // action when parent row is deleted
 	ChildTables     []*Table       // tables interleaved in this table
+
+	// Foreign key fields
+	ForeignKeys  []ForeignKeyConstraint // FK constraints where this table is the referencing (child) side
+	ReferencedBy []*ForeignKeyRef       // back-references from tables that reference this table
 }
 
 // NewTable creates a new empty table.

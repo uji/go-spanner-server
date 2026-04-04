@@ -26,7 +26,7 @@ func ParseSections(data string) []Section {
 	var contentLines []string
 	inSection := false
 
-	for _, line := range strings.Split(data, "\n") {
+	for line := range strings.SplitSeq(data, "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.HasPrefix(line, "-- ") && strings.HasSuffix(line, " --") {
 			if inSection {
@@ -54,7 +54,7 @@ func ParseSections(data string) []Section {
 // SplitStatements splits a semicolon-delimited SQL text into individual statements.
 func SplitStatements(s string) []string {
 	var stmts []string
-	for _, part := range strings.Split(s, ";") {
+	for part := range strings.SplitSeq(s, ";") {
 		part = strings.TrimSpace(part)
 		if part != "" {
 			stmts = append(stmts, part)
@@ -131,7 +131,7 @@ func formatValue(gcv spanner.GenericColumnValue) string {
 // ParseExpectLines converts the content of an expect.out section into a list of lines.
 func ParseExpectLines(s string) []string {
 	var lines []string
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			lines = append(lines, line)

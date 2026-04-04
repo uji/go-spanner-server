@@ -42,6 +42,8 @@ func (db *Database) ApplyDDL(sql string) error {
 		return db.applyDropIndex(s, sql)
 	case *ast.DropTable:
 		return db.applyDropTable(s, sql)
+	case *ast.AlterTable:
+		return db.applyAlterTable(s, sql)
 	default:
 		return fmt.Errorf("unsupported DDL statement: %T", stmt)
 	}
@@ -85,13 +87,28 @@ func (db *Database) applyCreateTable(ct *ast.CreateTable, rawSQL string) error {
 
 	table := NewTable(tableName, cols, pkCols)
 
+	db.Tables[tableName] = table
+
+	for _, tc := range ct.TableConstraints {
+		fk, ok := tc.Constraint.(*ast.ForeignKey)
+		if !ok {
+			continue
+		}
+		if err := db.processForeignKey(table, tc.Name, fk); err != nil {
+			delete(db.Tables, tableName)
+			return err
+		}
+	}
+
 	if ct.Cluster != nil {
 		parentName := ct.Cluster.TableName.Idents[0].Name
 		parentTable, ok := db.Tables[parentName]
 		if !ok {
+			delete(db.Tables, tableName)
 			return fmt.Errorf("parent table %q not found", parentName)
 		}
 		if err := validateInterleave(parentTable, table); err != nil {
+			delete(db.Tables, tableName)
 			return err
 		}
 		table.ParentTableName = parentName
@@ -103,7 +120,6 @@ func (db *Database) applyCreateTable(ct *ast.CreateTable, rawSQL string) error {
 		parentTable.ChildTables = append(parentTable.ChildTables, table)
 	}
 
-	db.Tables[tableName] = table
 	db.DDLs = append(db.DDLs, rawSQL)
 	return nil
 }
@@ -187,6 +203,125 @@ func (db *Database) applyCreateIndex(ci *ast.CreateIndex, rawSQL string) error {
 	return nil
 }
 
+func (db *Database) processForeignKey(table *Table, nameIdent *ast.Ident, fk *ast.ForeignKey) error {
+	// Resolve referencing columns
+	fkCols := make([]int, len(fk.Columns))
+	for i, col := range fk.Columns {
+		idx, ok := table.ColIndex[col.Name]
+		if !ok {
+			return fmt.Errorf("foreign key column %q not found in table %q", col.Name, table.Name)
+		}
+		fkCols[i] = idx
+	}
+
+	// Resolve referenced table
+	refTableName := fk.ReferenceTable.Idents[0].Name
+	refTable, ok := db.Tables[refTableName]
+	if !ok {
+		return fmt.Errorf("referenced table %q not found", refTableName)
+	}
+
+	// Resolve referenced columns
+	refCols := make([]int, len(fk.ReferenceColumns))
+	for i, col := range fk.ReferenceColumns {
+		idx, ok := refTable.ColIndex[col.Name]
+		if !ok {
+			return fmt.Errorf("referenced column %q not found in table %q", col.Name, refTableName)
+		}
+		refCols[i] = idx
+	}
+
+	if len(fkCols) != len(refCols) {
+		return fmt.Errorf("foreign key column count mismatch: %d referencing vs %d referenced", len(fkCols), len(refCols))
+	}
+
+	// Determine constraint name
+	constraintName := ""
+	if nameIdent != nil {
+		constraintName = nameIdent.Name
+	} else {
+		constraintName = fmt.Sprintf("FK_%s_%s_%d", table.Name, refTableName, len(table.ForeignKeys)+1)
+	}
+
+	onDelete := OnDeleteNoAction
+	if fk.OnDelete == ast.OnDeleteCascade {
+		onDelete = OnDeleteCascade
+	}
+
+	enforced := fk.Enforcement != ast.NotEnforced
+
+	constraintIdx := len(table.ForeignKeys)
+	table.ForeignKeys = append(table.ForeignKeys, ForeignKeyConstraint{
+		Name:             constraintName,
+		Columns:          fkCols,
+		ReferenceTable:   refTableName,
+		ReferenceColumns: refCols,
+		OnDelete:         onDelete,
+		Enforced:         enforced,
+	})
+
+	refTable.ReferencedBy = append(refTable.ReferencedBy, &ForeignKeyRef{
+		ConstraintName: constraintName,
+		ChildTable:     table,
+		ConstraintIdx:  constraintIdx,
+	})
+
+	return nil
+}
+
+func (db *Database) applyAlterTable(at *ast.AlterTable, rawSQL string) error {
+	tableName := at.Name.Idents[0].Name
+	table, ok := db.Tables[tableName]
+	if !ok {
+		return fmt.Errorf("table %q not found", tableName)
+	}
+
+	switch alt := at.TableAlteration.(type) {
+	case *ast.AddTableConstraint:
+		fk, ok := alt.TableConstraint.Constraint.(*ast.ForeignKey)
+		if !ok {
+			return fmt.Errorf("unsupported constraint type: %T", alt.TableConstraint.Constraint)
+		}
+		if err := db.processForeignKey(table, alt.TableConstraint.Name, fk); err != nil {
+			return err
+		}
+	case *ast.DropConstraint:
+		if err := db.dropConstraint(table, alt.Name.Name); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported ALTER TABLE operation: %T", at.TableAlteration)
+	}
+
+	db.DDLs = append(db.DDLs, rawSQL)
+	return nil
+}
+
+func (db *Database) dropConstraint(table *Table, constraintName string) error {
+	for i, fk := range table.ForeignKeys {
+		if fk.Name != constraintName {
+			continue
+		}
+		// Remove from referenced table's ReferencedBy
+		refTable := db.Tables[fk.ReferenceTable]
+		for j, ref := range refTable.ReferencedBy {
+			if ref.ConstraintName == constraintName {
+				refTable.ReferencedBy = append(refTable.ReferencedBy[:j], refTable.ReferencedBy[j+1:]...)
+				break
+			}
+		}
+		table.ForeignKeys = append(table.ForeignKeys[:i], table.ForeignKeys[i+1:]...)
+		// Update ConstraintIdx for remaining refs pointing to this table
+		for _, ref := range refTable.ReferencedBy {
+			if ref.ChildTable == table && ref.ConstraintIdx > i {
+				ref.ConstraintIdx--
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("constraint %q not found on table %q", constraintName, table.Name)
+}
+
 func (db *Database) applyDropTable(dt *ast.DropTable, rawSQL string) error {
 	tableName := dt.Name.Idents[0].Name
 
@@ -204,6 +339,14 @@ func (db *Database) applyDropTable(dt *ast.DropTable, rawSQL string) error {
 			childNames[i] = c.Name
 		}
 		return fmt.Errorf("cannot drop table %q: interleaved child tables exist: %v", tableName, childNames)
+	}
+
+	if len(table.ReferencedBy) > 0 {
+		constraintNames := make([]string, len(table.ReferencedBy))
+		for i, ref := range table.ReferencedBy {
+			constraintNames[i] = ref.ConstraintName
+		}
+		return fmt.Errorf("cannot drop table %q: referenced by foreign key constraints: %v", tableName, constraintNames)
 	}
 
 	// Remove from parent's ChildTables

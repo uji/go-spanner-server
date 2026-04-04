@@ -17,7 +17,7 @@ func findChildRows(childTable *Table, parentKey []any) []Row {
 	var rows []Row
 	childTable.Rows.AscendGreaterOrEqual(probe, func(r Row) bool {
 		// Stop if the PK prefix no longer matches
-		for i := 0; i < parentPKLen; i++ {
+		for i := range parentPKLen {
 			if CompareValues(r.Data[childTable.PKCols[i]], parentKey[i]) != 0 {
 				return false
 			}
@@ -43,7 +43,7 @@ func (db *Database) checkParentExists(table *Table, cols []string, vals []any) e
 	// Extract parent PK values from child row data (first N PK columns are shared)
 	parentPKLen := len(parentTable.PKCols)
 	parentProbe := Row{Data: make([]any, len(parentTable.Cols))}
-	for i := 0; i < parentPKLen; i++ {
+	for i := range parentPKLen {
 		childColIdx := table.PKCols[i]
 		parentColIdx := parentTable.PKCols[i]
 		parentProbe.Data[parentColIdx] = data[childColIdx]
@@ -82,10 +82,29 @@ func (db *Database) checkNoActionConstraints(table *Table, key []any) error {
 			}
 		}
 	}
-	return nil
+
+	// Collect full row data for FK check
+	probe := Row{Data: make([]any, len(table.Cols))}
+	for i, pkIdx := range table.PKCols {
+		probe.Data[pkIdx] = key[i]
+	}
+	row, ok := table.Rows.Get(probe)
+	if !ok {
+		return nil
+	}
+	return db.checkForeignKeyNoActionOnDelete(table, row.Data)
 }
 
 func (db *Database) performCascadeDeletes(table *Table, key []any) {
+	// Get the row data for FK cascade
+	probe := Row{Data: make([]any, len(table.Cols))}
+	for i, pkIdx := range table.PKCols {
+		probe.Data[pkIdx] = key[i]
+	}
+	if row, ok := table.Rows.Get(probe); ok {
+		db.performForeignKeyCascadeDeletes(table, row.Data)
+	}
+
 	for _, child := range table.ChildTables {
 		if child.OnDelete != OnDeleteCascade {
 			continue
@@ -112,17 +131,20 @@ func extractPKValues(table *Table, row Row) []any {
 	return key
 }
 
-// InsertRow inserts a row into the table, enforcing interleave parent existence.
+// InsertRow inserts a row into the table, enforcing interleave parent existence and FK constraints.
 func (db *Database) InsertRow(table *Table, cols []string, vals []any) error {
 	if table.ParentTableName != "" {
 		if err := db.checkParentExists(table, cols, vals); err != nil {
 			return err
 		}
 	}
+	if err := db.checkForeignKeyOnInsert(table, cols, vals); err != nil {
+		return err
+	}
 	return table.InsertRow(cols, vals)
 }
 
-// ReplaceRow replaces a row in the table, enforcing interleave parent existence for new rows.
+// ReplaceRow replaces a row in the table, enforcing interleave parent existence and FK constraints for new rows.
 func (db *Database) ReplaceRow(table *Table, cols []string, vals []any) error {
 	if table.ParentTableName != "" {
 		// Check if row exists; if not, parent must exist
@@ -137,9 +159,33 @@ func (db *Database) ReplaceRow(table *Table, cols []string, vals []any) error {
 			if err := db.checkParentExists(table, cols, vals); err != nil {
 				return err
 			}
+			if err := db.checkForeignKeyOnInsert(table, cols, vals); err != nil {
+				return err
+			}
+		}
+	} else {
+		data := make([]any, len(table.Cols))
+		for i, col := range cols {
+			if idx, ok := table.ColIndex[col]; ok {
+				data[idx] = vals[i]
+			}
+		}
+		probe := Row{Data: data}
+		if _, ok := table.Rows.Get(probe); !ok {
+			if err := db.checkForeignKeyOnInsert(table, cols, vals); err != nil {
+				return err
+			}
 		}
 	}
 	return table.ReplaceRow(cols, vals)
+}
+
+// UpdateRow updates a row in the table, enforcing FK constraints.
+func (db *Database) UpdateRow(table *Table, cols []string, vals []any) error {
+	if err := db.checkForeignKeyOnInsert(table, cols, vals); err != nil {
+		return err
+	}
+	return table.UpdateRow(cols, vals)
 }
 
 // DeleteByKeys deletes rows matching the given keys, enforcing interleave CASCADE/NO ACTION.
@@ -153,9 +199,9 @@ func (db *Database) DeleteByKeys(table *Table, keys [][]any) error {
 	return nil
 }
 
-// DeleteByRange deletes rows in the given range, enforcing interleave CASCADE/NO ACTION.
+// DeleteByRange deletes rows in the given range, enforcing interleave CASCADE/NO ACTION and FK constraints.
 func (db *Database) DeleteByRange(table *Table, startKey, endKey []any, startClosed, endClosed bool) error {
-	if len(table.ChildTables) > 0 {
+	if len(table.ChildTables) > 0 || len(table.ReferencedBy) > 0 {
 		// Collect all column indexes to get full rows, then extract PK values
 		allCols := make([]int, len(table.Cols))
 		for i := range allCols {
@@ -201,7 +247,7 @@ func (db *Database) checkDeleteAllConstraints(table *Table) error {
 			}
 		}
 	}
-	return nil
+	return db.checkForeignKeyNoActionOnDeleteAll(table)
 }
 
 func (db *Database) performDeleteAll(table *Table) {
@@ -210,5 +256,6 @@ func (db *Database) performDeleteAll(table *Table) {
 			db.performDeleteAll(child)
 		}
 	}
+	db.performForeignKeyCascadeDeleteAll(table)
 	table.DeleteAll()
 }

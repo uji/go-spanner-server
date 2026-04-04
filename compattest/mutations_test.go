@@ -11,7 +11,6 @@ import (
 
 // mutationTestCase defines a single mutation test case declaratively.
 type mutationTestCase struct {
-	name      string
 	ddl       []string
 	ops       [][]*spanner.Mutation // each element is one Apply call, executed in order
 	readTable string
@@ -29,10 +28,9 @@ var singersDDL = []string{
 }
 
 // mutationTests lists all mutation test cases.
-var mutationTests = []mutationTestCase{
-	{
-		name: "InsertAndRead",
-		ddl:  singersDDL,
+var mutationTests = map[string]mutationTestCase{
+	"InsertAndRead": {
+		ddl: singersDDL,
 		ops: [][]*spanner.Mutation{
 			{
 				spanner.InsertOrUpdate("Singers",
@@ -50,9 +48,8 @@ var mutationTests = []mutationTestCase{
 		readKeys:  spanner.AllKeys(),
 		wantRows:  []string{`(1, "Marc", "Richards")`, `(2, "Catalina", "Smith")`},
 	},
-	{
-		name: "UpdateAndRead",
-		ddl:  singersDDL,
+	"UpdateAndRead": {
+		ddl: singersDDL,
 		ops: [][]*spanner.Mutation{
 			{
 				spanner.Insert("Singers",
@@ -76,9 +73,8 @@ var mutationTests = []mutationTestCase{
 		readKeys:  spanner.Key{int64(1)},
 		wantRows:  []string{`(1, "Marcus", "Richards")`},
 	},
-	{
-		name: "DeleteAndRead",
-		ddl:  singersDDL,
+	"DeleteAndRead": {
+		ddl: singersDDL,
 		ops: [][]*spanner.Mutation{
 			{
 				spanner.Insert("Singers",
@@ -103,9 +99,8 @@ var mutationTests = []mutationTestCase{
 		readKeys:  spanner.AllKeys(),
 		wantRows:  []string{"(1)", "(3)"},
 	},
-	{
-		name: "InsertOrUpdateExisting",
-		ddl:  singersDDL,
+	"InsertOrUpdateExisting": {
+		ddl: singersDDL,
 		ops: [][]*spanner.Mutation{
 			{
 				spanner.Insert("Singers",
@@ -125,9 +120,8 @@ var mutationTests = []mutationTestCase{
 		readKeys:  spanner.Key{int64(1)},
 		wantRows:  []string{`(1, "Marcus", "Johnson")`},
 	},
-	{
-		name: "ReplaceAndRead",
-		ddl:  singersDDL,
+	"ReplaceAndRead": {
+		ddl: singersDDL,
 		ops: [][]*spanner.Mutation{
 			{
 				spanner.Insert("Singers",
@@ -153,9 +147,8 @@ var mutationTests = []mutationTestCase{
 		readKeys:  spanner.AllKeys(),
 		wantRows:  []string{`(1, "Marcus", "Johnson")`, `(2, "Alice", "Trentor")`},
 	},
-	{
-		name: "DeleteAllAndRead",
-		ddl:  singersDDL,
+	"DeleteAllAndRead": {
+		ddl: singersDDL,
 		ops: [][]*spanner.Mutation{
 			{
 				spanner.Insert("Singers",
@@ -176,9 +169,8 @@ var mutationTests = []mutationTestCase{
 		readKeys:  spanner.AllKeys(),
 		wantRows:  []string{},
 	},
-	{
-		name: "DeleteByRangeAndRead",
-		ddl:  singersDDL,
+	"DeleteByRangeAndRead": {
+		ddl: singersDDL,
 		ops: [][]*spanner.Mutation{
 			{
 				spanner.Insert("Singers", []string{"SingerId", "FirstName", "LastName"}, []any{int64(1), "First1", "Last1"}),
@@ -242,8 +234,8 @@ func runMutationTest(ctx context.Context, t *testing.T, client *spanner.Client, 
 }
 
 func TestCompat_Mutations(t *testing.T) {
-	for _, tc := range mutationTests {
-		t.Run(tc.name, func(t *testing.T) {
+	for name, tc := range mutationTests {
+		t.Run(name, func(t *testing.T) {
 			testutil.RunCompat(t, tc.ddl, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 				runMutationTest(ctx, t, client, tc)
 			})

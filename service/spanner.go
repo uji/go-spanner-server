@@ -166,7 +166,7 @@ func (s *SpannerServer) applyUpdate(db *store.Database, write *sppb.Mutation_Wri
 		return err
 	}
 	for _, vals := range rows {
-		if err := table.UpdateRow(cols, vals); err != nil {
+		if err := db.UpdateRow(table, cols, vals); err != nil {
 			return err
 		}
 	}
