@@ -3,6 +3,7 @@ package compattest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/spanner"
@@ -63,128 +64,199 @@ var threeLevelDDL = []string{
 	INTERLEAVE IN PARENT Albums ON DELETE CASCADE`,
 }
 
-// TestCompat_InterleaveInsertChildWithParent verifies inserting a parent then child succeeds.
-func TestCompat_InterleaveInsertChildWithParent(t *testing.T) {
-	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
-		_, err := client.Apply(ctx, []*spanner.Mutation{
-			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
-		})
-		if err != nil {
-			t.Fatalf("insert singer: %v", err)
-		}
-
-		_, err = client.Apply(ctx, []*spanner.Mutation{
-			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album One"}),
-		})
-		if err != nil {
-			t.Fatalf("insert album: %v", err)
-		}
-
-		iter := client.Single().Read(ctx, "Albums", spanner.AllKeys(), []string{"SingerId", "AlbumId", "Title"})
-		defer iter.Stop()
-		var count int
-		if err := iter.Do(func(r *spanner.Row) error { count++; return nil }); err != nil {
-			t.Fatalf("read albums: %v", err)
-		}
-		if count != 1 {
-			t.Errorf("expected 1 album, got %d", count)
-		}
-	})
+// interleaveTestCase defines a single interleave test case declaratively.
+type interleaveTestCase struct {
+	ddl          []string
+	ops          [][]*spanner.Mutation
+	wantApplyErr bool // if true, the last ops entry is expected to fail
+	readTable    string
+	readCols     []string
+	readKeys     spanner.KeySet
+	wantRows     []string // expected rows in testutil.FormatRow format; used only when wantApplyErr is false
 }
 
-// TestCompat_InterleaveInsertOrphanFails verifies inserting a child without a parent fails.
-func TestCompat_InterleaveInsertOrphanFails(t *testing.T) {
-	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
-		_, err := client.Apply(ctx, []*spanner.Mutation{
-			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(99), int64(1), "Orphan Album"}),
-		})
+// interleaveTests lists all table-driven interleave test cases.
+var interleaveTests = map[string]interleaveTestCase{
+	"InsertChildWithParent": {
+		ddl: singerAlbumDDL,
+		ops: [][]*spanner.Mutation{
+			{
+				spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
+			},
+			{
+				spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album One"}),
+			},
+		},
+		readTable: "Albums",
+		readCols:  []string{"SingerId", "AlbumId", "Title"},
+		readKeys:  spanner.AllKeys(),
+		wantRows:  []string{`(1, 1, "Album One")`},
+	},
+	"InsertOrphanFails": {
+		ddl: singerAlbumDDL,
+		ops: [][]*spanner.Mutation{
+			{
+				spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(99), int64(1), "Orphan Album"}),
+			},
+		},
+		wantApplyErr: true,
+	},
+	"CascadeDelete": {
+		ddl: singerAlbumDDL,
+		ops: [][]*spanner.Mutation{
+			{
+				spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
+				spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album One"}),
+				spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(2), "Album Two"}),
+			},
+			{
+				spanner.Delete("Singers", spanner.Key{int64(1)}),
+			},
+		},
+		readTable: "Albums",
+		readCols:  []string{"SingerId", "AlbumId"},
+		readKeys:  spanner.AllKeys(),
+		wantRows:  []string{},
+	},
+	"NoActionDeleteBlocked": {
+		ddl: singerAlbumNoActionDDL,
+		ops: [][]*spanner.Mutation{
+			{
+				spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
+				spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album One"}),
+			},
+			{
+				spanner.Delete("Singers", spanner.Key{int64(1)}),
+			},
+		},
+		wantApplyErr: true,
+	},
+	"NoActionDeleteAllowed": {
+		ddl: singerAlbumNoActionDDL,
+		ops: [][]*spanner.Mutation{
+			{
+				spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
+			},
+			{
+				spanner.Delete("Singers", spanner.Key{int64(1)}),
+			},
+		},
+		readTable: "Singers",
+		readCols:  []string{"SingerId"},
+		readKeys:  spanner.AllKeys(),
+		wantRows:  []string{},
+	},
+	"CascadeDeleteByRange": {
+		ddl: singerAlbumDDL,
+		ops: [][]*spanner.Mutation{
+			{
+				spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
+				spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(2), "Bob"}),
+				spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album 1-1"}),
+				spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(2), int64(1), "Album 2-1"}),
+			},
+			{
+				spanner.Delete("Singers", spanner.KeyRange{
+					Start: spanner.Key{int64(1)},
+					End:   spanner.Key{int64(1)},
+					Kind:  spanner.ClosedClosed,
+				}),
+			},
+		},
+		readTable: "Albums",
+		readCols:  []string{"SingerId", "AlbumId"},
+		readKeys:  spanner.AllKeys(),
+		wantRows:  []string{"(2, 1)"},
+	},
+	"CascadeDeleteAll": {
+		ddl: singerAlbumDDL,
+		ops: [][]*spanner.Mutation{
+			{
+				spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
+				spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(2), "Bob"}),
+				spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album 1-1"}),
+				spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(2), int64(1), "Album 2-1"}),
+			},
+			{
+				spanner.Delete("Singers", spanner.AllKeys()),
+			},
+		},
+		readTable: "Albums",
+		readCols:  []string{"SingerId"},
+		readKeys:  spanner.AllKeys(),
+		wantRows:  []string{},
+	},
+	"ReplaceOrphanFails": {
+		ddl: singerAlbumDDL,
+		ops: [][]*spanner.Mutation{
+			{
+				spanner.InsertOrUpdate("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(99), int64(1), "Orphan"}),
+			},
+		},
+		wantApplyErr: true,
+	},
+}
+
+// runInterleaveTest is the generic runner for interleave test cases.
+func runInterleaveTest(ctx context.Context, t *testing.T, client *spanner.Client, tc interleaveTestCase) {
+	t.Helper()
+
+	// Apply all ops except the last (if we expect the last to fail).
+	applyUntil := len(tc.ops)
+	if tc.wantApplyErr {
+		applyUntil = len(tc.ops) - 1
+	}
+	for i := range applyUntil {
+		if _, err := client.Apply(ctx, tc.ops[i]); err != nil {
+			t.Fatalf("ops[%d]: failed to apply mutations: %v", i, err)
+		}
+	}
+
+	if tc.wantApplyErr {
+		last := len(tc.ops) - 1
+		_, err := client.Apply(ctx, tc.ops[last])
 		if err == nil {
-			t.Fatal("expected error inserting orphan child row, got nil")
+			t.Fatalf("ops[%d]: expected error, got nil", last)
 		}
-	})
+		return
+	}
+
+	iter := client.Single().Read(ctx, tc.readTable, tc.readKeys, tc.readCols)
+	defer iter.Stop()
+
+	var gotRows []string
+	if err := iter.Do(func(row *spanner.Row) error {
+		gotRows = append(gotRows, testutil.FormatRow(row))
+		return nil
+	}); err != nil {
+		t.Fatalf("failed to read rows: %v", err)
+	}
+	if gotRows == nil {
+		gotRows = []string{}
+	}
+
+	if len(gotRows) != len(tc.wantRows) {
+		t.Fatalf("row count: got %d, want %d\ngot:\n%s\nwant:\n%s",
+			len(gotRows), len(tc.wantRows),
+			strings.Join(gotRows, "\n"),
+			strings.Join(tc.wantRows, "\n"),
+		)
+	}
+	for i, want := range tc.wantRows {
+		if gotRows[i] != want {
+			t.Errorf("row[%d]: got %s, want %s", i, gotRows[i], want)
+		}
+	}
 }
 
-// TestCompat_InterleaveCascadeDelete verifies ON DELETE CASCADE deletes child rows.
-func TestCompat_InterleaveCascadeDelete(t *testing.T) {
-	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
-		// Insert parent and child
-		_, err := client.Apply(ctx, []*spanner.Mutation{
-			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
-			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album One"}),
-			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(2), "Album Two"}),
+func TestCompat_Interleaves(t *testing.T) {
+	for name, tc := range interleaveTests {
+		t.Run(name, func(t *testing.T) {
+			testutil.RunCompat(t, tc.ddl, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+				runInterleaveTest(ctx, t, client, tc)
+			})
 		})
-		if err != nil {
-			t.Fatalf("insert: %v", err)
-		}
-
-		// Delete the parent
-		_, err = client.Apply(ctx, []*spanner.Mutation{
-			spanner.Delete("Singers", spanner.Key{int64(1)}),
-		})
-		if err != nil {
-			t.Fatalf("delete singer: %v", err)
-		}
-
-		// Verify child rows are gone
-		iter := client.Single().Read(ctx, "Albums", spanner.AllKeys(), []string{"SingerId", "AlbumId"})
-		defer iter.Stop()
-		var count int
-		if err := iter.Do(func(r *spanner.Row) error { count++; return nil }); err != nil {
-			t.Fatalf("read albums: %v", err)
-		}
-		if count != 0 {
-			t.Errorf("expected 0 albums after cascade delete, got %d", count)
-		}
-	})
-}
-
-// TestCompat_InterleaveNoActionDeleteBlocked verifies ON DELETE NO ACTION blocks parent deletion when child rows exist.
-func TestCompat_InterleaveNoActionDeleteBlocked(t *testing.T) {
-	testutil.RunCompat(t, singerAlbumNoActionDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
-		_, err := client.Apply(ctx, []*spanner.Mutation{
-			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
-			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album One"}),
-		})
-		if err != nil {
-			t.Fatalf("insert: %v", err)
-		}
-
-		_, err = client.Apply(ctx, []*spanner.Mutation{
-			spanner.Delete("Singers", spanner.Key{int64(1)}),
-		})
-		if err == nil {
-			t.Fatal("expected error deleting parent with child rows (NO ACTION), got nil")
-		}
-	})
-}
-
-// TestCompat_InterleaveNoActionDeleteAllowed verifies ON DELETE NO ACTION allows deletion when no child rows exist.
-func TestCompat_InterleaveNoActionDeleteAllowed(t *testing.T) {
-	testutil.RunCompat(t, singerAlbumNoActionDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
-		_, err := client.Apply(ctx, []*spanner.Mutation{
-			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
-		})
-		if err != nil {
-			t.Fatalf("insert singer: %v", err)
-		}
-
-		_, err = client.Apply(ctx, []*spanner.Mutation{
-			spanner.Delete("Singers", spanner.Key{int64(1)}),
-		})
-		if err != nil {
-			t.Fatalf("delete singer without children: %v", err)
-		}
-
-		iter := client.Single().Read(ctx, "Singers", spanner.AllKeys(), []string{"SingerId"})
-		defer iter.Stop()
-		var count int
-		if err := iter.Do(func(r *spanner.Row) error { count++; return nil }); err != nil {
-			t.Fatalf("read singers: %v", err)
-		}
-		if count != 0 {
-			t.Errorf("expected 0 singers, got %d", count)
-		}
-	})
+	}
 }
 
 // TestCompat_InterleaveCascadeDeleteRecursive verifies 3-level cascade deletion.
@@ -200,7 +272,6 @@ func TestCompat_InterleaveCascadeDeleteRecursive(t *testing.T) {
 			t.Fatalf("insert: %v", err)
 		}
 
-		// Delete the top-level parent
 		_, err = client.Apply(ctx, []*spanner.Mutation{
 			spanner.Delete("Singers", spanner.Key{int64(1)}),
 		})
@@ -208,7 +279,6 @@ func TestCompat_InterleaveCascadeDeleteRecursive(t *testing.T) {
 			t.Fatalf("delete singer: %v", err)
 		}
 
-		// Verify all descendant rows are gone
 		for _, tbl := range []string{"Albums", "Songs"} {
 			iter := client.Single().Read(ctx, tbl, spanner.AllKeys(), []string{"SingerId"})
 			defer iter.Stop()
@@ -219,98 +289,6 @@ func TestCompat_InterleaveCascadeDeleteRecursive(t *testing.T) {
 			if count != 0 {
 				t.Errorf("expected 0 rows in %s after recursive cascade delete, got %d", tbl, count)
 			}
-		}
-	})
-}
-
-// TestCompat_InterleaveCascadeDeleteByRange verifies ON DELETE CASCADE when deleting by key range.
-func TestCompat_InterleaveCascadeDeleteByRange(t *testing.T) {
-	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
-		_, err := client.Apply(ctx, []*spanner.Mutation{
-			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
-			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(2), "Bob"}),
-			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album 1-1"}),
-			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(2), int64(1), "Album 2-1"}),
-		})
-		if err != nil {
-			t.Fatalf("insert: %v", err)
-		}
-
-		// Delete singers in range [1, 1] (only singer 1)
-		_, err = client.Apply(ctx, []*spanner.Mutation{
-			spanner.Delete("Singers", spanner.KeyRange{
-				Start: spanner.Key{int64(1)},
-				End:   spanner.Key{int64(1)},
-				Kind:  spanner.ClosedClosed,
-			}),
-		})
-		if err != nil {
-			t.Fatalf("delete by range: %v", err)
-		}
-
-		// Verify singer 1's albums are gone but singer 2's remain
-		iter := client.Single().Read(ctx, "Albums", spanner.AllKeys(), []string{"SingerId", "AlbumId"})
-		defer iter.Stop()
-		var singerIds []int64
-		if err := iter.Do(func(r *spanner.Row) error {
-			var sid, aid int64
-			if err := r.Columns(&sid, &aid); err != nil {
-				return err
-			}
-			singerIds = append(singerIds, sid)
-			return nil
-		}); err != nil {
-			t.Fatalf("read albums: %v", err)
-		}
-		if len(singerIds) != 1 || singerIds[0] != 2 {
-			t.Errorf("expected only singer 2's album to remain, got singerIds=%v", singerIds)
-		}
-	})
-}
-
-// TestCompat_InterleaveCascadeDeleteAll verifies ON DELETE CASCADE when deleting all rows.
-func TestCompat_InterleaveCascadeDeleteAll(t *testing.T) {
-	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
-		_, err := client.Apply(ctx, []*spanner.Mutation{
-			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
-			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(2), "Bob"}),
-			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album 1-1"}),
-			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(2), int64(1), "Album 2-1"}),
-		})
-		if err != nil {
-			t.Fatalf("insert: %v", err)
-		}
-
-		// Delete all singers
-		_, err = client.Apply(ctx, []*spanner.Mutation{
-			spanner.Delete("Singers", spanner.AllKeys()),
-		})
-		if err != nil {
-			t.Fatalf("delete all singers: %v", err)
-		}
-
-		// Verify all albums are gone too
-		iter := client.Single().Read(ctx, "Albums", spanner.AllKeys(), []string{"SingerId"})
-		defer iter.Stop()
-		var count int
-		if err := iter.Do(func(r *spanner.Row) error { count++; return nil }); err != nil {
-			t.Fatalf("read albums: %v", err)
-		}
-		if count != 0 {
-			t.Errorf("expected 0 albums after delete all with cascade, got %d", count)
-		}
-	})
-}
-
-// TestCompat_InterleaveReplaceOrphanFails verifies that replacing a non-existent child row fails without a parent.
-func TestCompat_InterleaveReplaceOrphanFails(t *testing.T) {
-	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
-		_, err := client.Apply(ctx, []*spanner.Mutation{
-			// InsertOrUpdate (replace semantics) without parent
-			spanner.InsertOrUpdate("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(99), int64(1), "Orphan"}),
-		})
-		if err == nil {
-			t.Fatal("expected error replacing orphan child row, got nil")
 		}
 	})
 }
@@ -327,11 +305,9 @@ func TestCompat_InterleavePKValidation(t *testing.T) {
 		) PRIMARY KEY (ChildId),
 		INTERLEAVE IN PARENT Parents ON DELETE CASCADE`,
 	}
-	// The DDL should fail; verify by attempting setup and expecting failure
 	for _, b := range testutil.Backends() {
 		t.Run(b.Name(), func(t *testing.T) {
 			ctx := context.Background()
-			// We expect setup to fail - use a raw backend setup that doesn't t.Fatal on DDL error
 			srv := spannerserver.New()
 			conn, err := srv.Conn(ctx)
 			if err != nil {
@@ -387,7 +363,6 @@ func TestCompat_InterleaveDropParentBlocked(t *testing.T) {
 // TestCompat_InterleaveDropChildThenParent verifies dropping child then parent succeeds.
 func TestCompat_InterleaveDropChildThenParent(t *testing.T) {
 	testutil.RunCompatWithAdmin(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client, adminClient *database.DatabaseAdminClient, dbPath string) {
-		// Drop child first
 		op, err := adminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
 			Database:   dbPath,
 			Statements: []string{"DROP TABLE Albums"},
@@ -399,7 +374,6 @@ func TestCompat_InterleaveDropChildThenParent(t *testing.T) {
 			t.Fatalf("drop albums failed: %v", err)
 		}
 
-		// Then drop parent
 		op, err = adminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
 			Database:   dbPath,
 			Statements: []string{"DROP TABLE Singers"},
@@ -411,7 +385,6 @@ func TestCompat_InterleaveDropChildThenParent(t *testing.T) {
 			t.Fatalf("drop singers failed: %v", err)
 		}
 
-		// Verify tables are gone by attempting to read (should error)
 		iter := client.Single().Read(ctx, "Singers", spanner.AllKeys(), []string{"SingerId"})
 		defer iter.Stop()
 		_, err = iter.Next()

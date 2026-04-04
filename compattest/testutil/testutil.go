@@ -123,6 +123,22 @@ func formatValue(gcv spanner.GenericColumnValue) string {
 			return "true"
 		}
 		return "false"
+	case sppb.TypeCode_BYTES:
+		var v []byte
+		if err := gcv.Decode(&v); err != nil {
+			return fmt.Sprintf("<error:%v>", err)
+		}
+		return `b"` + string(v) + `"`
+	case sppb.TypeCode_ARRAY:
+		elems := gcv.Value.GetListValue().GetValues()
+		parts := make([]string, len(elems))
+		for i, elem := range elems {
+			parts[i] = formatValue(spanner.GenericColumnValue{
+				Type:  gcv.Type.ArrayElementType,
+				Value: elem,
+			})
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
 	default:
 		return fmt.Sprintf("<unsupported_type:%v>", gcv.Type.Code)
 	}
