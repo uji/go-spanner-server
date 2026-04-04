@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cloud.google.com/go/spanner"
+	"github.com/uji/go-spanner-server/compattest/testutil"
 	"google.golang.org/api/iterator"
 )
 
@@ -19,7 +20,7 @@ var indexDDL = []string{
 }
 
 func TestCompat_CreateIndexAndReadByIndex(t *testing.T) {
-	runCompat(t, indexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, indexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		t.Helper()
 
 		_, err := client.Apply(ctx, []*spanner.Mutation{
@@ -78,7 +79,7 @@ var uniqueIndexDDL = []string{
 }
 
 func TestCompat_UniqueIndex(t *testing.T) {
-	runCompat(t, uniqueIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, uniqueIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		t.Helper()
 
 		_, err := client.Apply(ctx, []*spanner.Mutation{
@@ -107,7 +108,7 @@ var nullFilteredIndexDDL = []string{
 }
 
 func TestCompat_NullFilteredIndex(t *testing.T) {
-	runCompat(t, nullFilteredIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, nullFilteredIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		t.Helper()
 
 		_, err := client.Apply(ctx, []*spanner.Mutation{
@@ -154,7 +155,7 @@ var storingIndexDDL = []string{
 }
 
 func TestCompat_IndexWithStoring(t *testing.T) {
-	runCompat(t, storingIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, storingIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		t.Helper()
 
 		_, err := client.Apply(ctx, []*spanner.Mutation{
@@ -208,7 +209,7 @@ var indexRangeScanDDL = []string{
 }
 
 func TestCompat_IndexRangeScan(t *testing.T) {
-	runCompat(t, indexRangeScanDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, indexRangeScanDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		t.Helper()
 
 		_, err := client.Apply(ctx, []*spanner.Mutation{
@@ -264,7 +265,7 @@ var descIndexDDL = []string{
 }
 
 func TestCompat_DescIndex(t *testing.T) {
-	runCompat(t, descIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, descIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		t.Helper()
 
 		_, err := client.Apply(ctx, []*spanner.Mutation{
@@ -318,7 +319,7 @@ var dropIndexDDL = []string{
 }
 
 func TestCompat_DropIndex(t *testing.T) {
-	runCompat(t, dropIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, dropIndexDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		t.Helper()
 
 		// Insert data and verify index works
@@ -356,7 +357,7 @@ func TestCompat_DropIndex(t *testing.T) {
 var indexMutationSyncDDL = indexDDL
 
 func TestCompat_IndexMutationSync(t *testing.T) {
-	runCompat(t, indexMutationSyncDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, indexMutationSyncDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		t.Helper()
 
 		// Insert rows

@@ -1,4 +1,4 @@
-package compattest
+package testutil
 
 import (
 	"context"
@@ -8,11 +8,11 @@ import (
 	"testing"
 
 	"cloud.google.com/go/spanner"
-	"github.com/uji/go-spanner-server/compattest/testutil"
 )
 
-// runTestFile runs a single txtar test file.
-func runTestFile(t *testing.T, path string) {
+// RunTestFile runs a single txtar test file against all available backends.
+// Adding a new file automatically registers a new test case.
+func RunTestFile(t *testing.T, path string) {
 	t.Helper()
 
 	data, err := os.ReadFile(path)
@@ -20,17 +20,17 @@ func runTestFile(t *testing.T, path string) {
 		t.Fatalf("failed to read test file %s: %v", path, err)
 	}
 
-	sections := testutil.ParseSections(string(data))
-	ddl := testutil.ExtractDDL(sections)
+	sections := ParseSections(string(data))
+	ddl := ExtractDDL(sections)
 
-	runCompat(t, ddl, func(ctx context.Context, t *testing.T, client *spanner.Client) {
-		testutil.RunSections(ctx, t, client, sections)
+	RunCompat(t, ddl, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+		RunSections(ctx, t, client, sections)
 	})
 }
 
-// runTestFiles runs all test files matching a glob pattern as subtests.
+// RunTestFiles runs all test files matching a glob pattern as subtests.
 // Adding a new file automatically registers a new test case.
-func runTestFiles(t *testing.T, pattern string) {
+func RunTestFiles(t *testing.T, pattern string) {
 	t.Helper()
 
 	files, err := filepath.Glob(pattern)
@@ -44,7 +44,7 @@ func runTestFiles(t *testing.T, pattern string) {
 	for _, f := range files {
 		name := strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))
 		t.Run(name, func(t *testing.T) {
-			runTestFile(t, f)
+			RunTestFile(t, f)
 		})
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cloud.google.com/go/spanner"
+	"github.com/uji/go-spanner-server/compattest/testutil"
 	"google.golang.org/api/iterator"
 )
 
@@ -100,7 +101,7 @@ func runArrayInsertAndRead(ctx context.Context, t *testing.T, client *spanner.Cl
 }
 
 func TestCompat_ArrayInsertAndRead(t *testing.T) {
-	runCompat(t, arrayDDL, runArrayInsertAndRead)
+	testutil.RunCompat(t, arrayDDL, runArrayInsertAndRead)
 }
 
 func runArrayQuery(ctx context.Context, t *testing.T, client *spanner.Client) {
@@ -162,7 +163,7 @@ func runArrayQuery(ctx context.Context, t *testing.T, client *spanner.Client) {
 }
 
 func TestCompat_ArrayQuery(t *testing.T) {
-	runCompat(t, arrayDDL, runArrayQuery)
+	testutil.RunCompat(t, arrayDDL, runArrayQuery)
 }
 
 func runArrayUpdate(ctx context.Context, t *testing.T, client *spanner.Client) {
@@ -206,7 +207,7 @@ func runArrayUpdate(ctx context.Context, t *testing.T, client *spanner.Client) {
 }
 
 func TestCompat_ArrayUpdate(t *testing.T) {
-	runCompat(t, arrayDDL, runArrayUpdate)
+	testutil.RunCompat(t, arrayDDL, runArrayUpdate)
 }
 
 var arrayAllTypesDDL = []string{
@@ -275,7 +276,7 @@ func runAllArrayTypes(ctx context.Context, t *testing.T, client *spanner.Client)
 }
 
 func TestCompat_AllArrayTypes(t *testing.T) {
-	runCompat(t, arrayAllTypesDDL, runAllArrayTypes)
+	testutil.RunCompat(t, arrayAllTypesDDL, runAllArrayTypes)
 }
 
 var arrayWithNullsDDL = []string{
@@ -326,7 +327,7 @@ func runArrayWithNullElements(ctx context.Context, t *testing.T, client *spanner
 }
 
 func TestCompat_ArrayWithNullElements(t *testing.T) {
-	runCompat(t, arrayWithNullsDDL, runArrayWithNullElements)
+	testutil.RunCompat(t, arrayWithNullsDDL, runArrayWithNullElements)
 }
 
 func strPtr(s string) *string {
@@ -385,5 +386,5 @@ func runArraySelectStar(ctx context.Context, t *testing.T, client *spanner.Clien
 }
 
 func TestCompat_ArraySelectStar(t *testing.T) {
-	runCompat(t, arraySelectStarDDL, runArraySelectStar)
+	testutil.RunCompat(t, arraySelectStarDDL, runArraySelectStar)
 }

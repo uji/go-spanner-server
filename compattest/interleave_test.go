@@ -13,82 +13,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	spannerserver "github.com/uji/go-spanner-server"
+	"github.com/uji/go-spanner-server/compattest/testutil"
 	"google.golang.org/api/option"
 )
-
-// setupWithAdmin creates a database and returns both spanner client and admin client.
-type adminBackend interface {
-	Name() string
-	SetupWithAdmin(ctx context.Context, t *testing.T, ddl []string) (client *spanner.Client, adminClient *database.DatabaseAdminClient, dbPath string, cleanup func())
-}
-
-type serverAdminBackend struct{}
-
-func (b *serverAdminBackend) Name() string { return "go-spanner-server" }
-
-func (b *serverAdminBackend) SetupWithAdmin(ctx context.Context, t *testing.T, ddl []string) (*spanner.Client, *database.DatabaseAdminClient, string, func()) {
-	t.Helper()
-
-	srv := spannerserver.New()
-	conn, err := srv.Conn(ctx)
-	if err != nil {
-		t.Fatalf("failed to get connection: %v", err)
-	}
-
-	adminClient, err := database.NewDatabaseAdminClient(ctx,
-		option.WithGRPCConn(conn),
-		option.WithoutAuthentication(),
-	)
-	if err != nil {
-		t.Fatalf("failed to create admin client: %v", err)
-	}
-
-	instancePath := fmt.Sprintf("projects/%s/instances/%s", serverProject, serverInstance)
-	op, err := adminClient.CreateDatabase(ctx, &databasepb.CreateDatabaseRequest{
-		Parent:          instancePath,
-		CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", serverDatabase),
-		ExtraStatements: ddl,
-	})
-	if err != nil {
-		t.Fatalf("failed to create database: %v", err)
-	}
-	if _, err := op.Wait(ctx); err != nil {
-		t.Fatalf("failed to wait for database creation: %v", err)
-	}
-
-	dbPath := fmt.Sprintf("%s/databases/%s", instancePath, serverDatabase)
-	client, err := spanner.NewClient(ctx, dbPath,
-		option.WithGRPCConn(conn),
-		option.WithoutAuthentication(),
-	)
-	if err != nil {
-		t.Fatalf("failed to create spanner client: %v", err)
-	}
-
-	cleanup := func() {
-		client.Close()
-		adminClient.Close()
-		conn.Close()
-		srv.Stop()
-	}
-	return client, adminClient, dbPath, cleanup
-}
-
-func adminBackends() []adminBackend {
-	return []adminBackend{&serverAdminBackend{}}
-}
-
-func runCompatWithAdmin(t *testing.T, ddl []string, fn func(context.Context, *testing.T, *spanner.Client, *database.DatabaseAdminClient, string)) {
-	t.Helper()
-	for _, b := range adminBackends() {
-		t.Run(b.Name(), func(t *testing.T) {
-			ctx := context.Background()
-			client, adminClient, dbPath, cleanup := b.SetupWithAdmin(ctx, t, ddl)
-			defer cleanup()
-			fn(ctx, t, client, adminClient, dbPath)
-		})
-	}
-}
 
 var singerAlbumDDL = []string{
 	`CREATE TABLE Singers (
@@ -138,7 +65,7 @@ var threeLevelDDL = []string{
 
 // TestCompat_InterleaveInsertChildWithParent verifies inserting a parent then child succeeds.
 func TestCompat_InterleaveInsertChildWithParent(t *testing.T) {
-	runCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		_, err := client.Apply(ctx, []*spanner.Mutation{
 			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
 		})
@@ -167,7 +94,7 @@ func TestCompat_InterleaveInsertChildWithParent(t *testing.T) {
 
 // TestCompat_InterleaveInsertOrphanFails verifies inserting a child without a parent fails.
 func TestCompat_InterleaveInsertOrphanFails(t *testing.T) {
-	runCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		_, err := client.Apply(ctx, []*spanner.Mutation{
 			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(99), int64(1), "Orphan Album"}),
 		})
@@ -179,7 +106,7 @@ func TestCompat_InterleaveInsertOrphanFails(t *testing.T) {
 
 // TestCompat_InterleaveCascadeDelete verifies ON DELETE CASCADE deletes child rows.
 func TestCompat_InterleaveCascadeDelete(t *testing.T) {
-	runCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		// Insert parent and child
 		_, err := client.Apply(ctx, []*spanner.Mutation{
 			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
@@ -213,7 +140,7 @@ func TestCompat_InterleaveCascadeDelete(t *testing.T) {
 
 // TestCompat_InterleaveNoActionDeleteBlocked verifies ON DELETE NO ACTION blocks parent deletion when child rows exist.
 func TestCompat_InterleaveNoActionDeleteBlocked(t *testing.T) {
-	runCompat(t, singerAlbumNoActionDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, singerAlbumNoActionDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		_, err := client.Apply(ctx, []*spanner.Mutation{
 			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
 			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album One"}),
@@ -233,7 +160,7 @@ func TestCompat_InterleaveNoActionDeleteBlocked(t *testing.T) {
 
 // TestCompat_InterleaveNoActionDeleteAllowed verifies ON DELETE NO ACTION allows deletion when no child rows exist.
 func TestCompat_InterleaveNoActionDeleteAllowed(t *testing.T) {
-	runCompat(t, singerAlbumNoActionDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, singerAlbumNoActionDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		_, err := client.Apply(ctx, []*spanner.Mutation{
 			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
 		})
@@ -262,7 +189,7 @@ func TestCompat_InterleaveNoActionDeleteAllowed(t *testing.T) {
 
 // TestCompat_InterleaveCascadeDeleteRecursive verifies 3-level cascade deletion.
 func TestCompat_InterleaveCascadeDeleteRecursive(t *testing.T) {
-	runCompat(t, threeLevelDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, threeLevelDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		_, err := client.Apply(ctx, []*spanner.Mutation{
 			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
 			spanner.Insert("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(1), int64(1), "Album One"}),
@@ -298,7 +225,7 @@ func TestCompat_InterleaveCascadeDeleteRecursive(t *testing.T) {
 
 // TestCompat_InterleaveCascadeDeleteByRange verifies ON DELETE CASCADE when deleting by key range.
 func TestCompat_InterleaveCascadeDeleteByRange(t *testing.T) {
-	runCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		_, err := client.Apply(ctx, []*spanner.Mutation{
 			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
 			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(2), "Bob"}),
@@ -343,7 +270,7 @@ func TestCompat_InterleaveCascadeDeleteByRange(t *testing.T) {
 
 // TestCompat_InterleaveCascadeDeleteAll verifies ON DELETE CASCADE when deleting all rows.
 func TestCompat_InterleaveCascadeDeleteAll(t *testing.T) {
-	runCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		_, err := client.Apply(ctx, []*spanner.Mutation{
 			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(1), "Alice"}),
 			spanner.Insert("Singers", []string{"SingerId", "Name"}, []any{int64(2), "Bob"}),
@@ -377,7 +304,7 @@ func TestCompat_InterleaveCascadeDeleteAll(t *testing.T) {
 
 // TestCompat_InterleaveReplaceOrphanFails verifies that replacing a non-existent child row fails without a parent.
 func TestCompat_InterleaveReplaceOrphanFails(t *testing.T) {
-	runCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+	testutil.RunCompat(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 		_, err := client.Apply(ctx, []*spanner.Mutation{
 			// InsertOrUpdate (replace semantics) without parent
 			spanner.InsertOrUpdate("Albums", []string{"SingerId", "AlbumId", "Title"}, []any{int64(99), int64(1), "Orphan"}),
@@ -401,7 +328,7 @@ func TestCompat_InterleavePKValidation(t *testing.T) {
 		INTERLEAVE IN PARENT Parents ON DELETE CASCADE`,
 	}
 	// The DDL should fail; verify by attempting setup and expecting failure
-	for _, b := range backends() {
+	for _, b := range testutil.Backends() {
 		t.Run(b.Name(), func(t *testing.T) {
 			ctx := context.Background()
 			// We expect setup to fail - use a raw backend setup that doesn't t.Fatal on DDL error
@@ -422,10 +349,10 @@ func TestCompat_InterleavePKValidation(t *testing.T) {
 			}
 			defer adminClient.Close()
 
-			instancePath := fmt.Sprintf("projects/%s/instances/%s", serverProject, serverInstance)
+			instancePath := fmt.Sprintf("projects/%s/instances/%s", testutil.ServerProject, testutil.ServerInstance)
 			op, err := adminClient.CreateDatabase(ctx, &databasepb.CreateDatabaseRequest{
 				Parent:          instancePath,
-				CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", serverDatabase),
+				CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", testutil.ServerDatabase),
 				ExtraStatements: invalidDDL,
 			})
 			if err != nil {
@@ -442,7 +369,7 @@ func TestCompat_InterleavePKValidation(t *testing.T) {
 
 // TestCompat_InterleaveDropParentBlocked verifies dropping a parent table fails when child tables exist.
 func TestCompat_InterleaveDropParentBlocked(t *testing.T) {
-	runCompatWithAdmin(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client, adminClient *database.DatabaseAdminClient, dbPath string) {
+	testutil.RunCompatWithAdmin(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client, adminClient *database.DatabaseAdminClient, dbPath string) {
 		op, err := adminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
 			Database:   dbPath,
 			Statements: []string{"DROP TABLE Singers"},
@@ -459,7 +386,7 @@ func TestCompat_InterleaveDropParentBlocked(t *testing.T) {
 
 // TestCompat_InterleaveDropChildThenParent verifies dropping child then parent succeeds.
 func TestCompat_InterleaveDropChildThenParent(t *testing.T) {
-	runCompatWithAdmin(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client, adminClient *database.DatabaseAdminClient, dbPath string) {
+	testutil.RunCompatWithAdmin(t, singerAlbumDDL, func(ctx context.Context, t *testing.T, client *spanner.Client, adminClient *database.DatabaseAdminClient, dbPath string) {
 		// Drop child first
 		op, err := adminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
 			Database:   dbPath,

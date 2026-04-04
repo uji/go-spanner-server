@@ -244,7 +244,7 @@ func runMutationTest(ctx context.Context, t *testing.T, client *spanner.Client, 
 func TestCompat_Mutations(t *testing.T) {
 	for _, tc := range mutationTests {
 		t.Run(tc.name, func(t *testing.T) {
-			runCompat(t, tc.ddl, func(ctx context.Context, t *testing.T, client *spanner.Client) {
+			testutil.RunCompat(t, tc.ddl, func(ctx context.Context, t *testing.T, client *spanner.Client) {
 				runMutationTest(ctx, t, client, tc)
 			})
 		})

@@ -1,4 +1,4 @@
-package compattest
+package testutil
 
 import (
 	"context"
@@ -20,27 +20,47 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// testBackend represents a Spanner-compatible backend for testing.
-type testBackend interface {
+const (
+	ServerProject  = "test-project"
+	ServerInstance = "test-instance"
+	ServerDatabase = "test-db"
+
+	EmulatorProject  = "test-project"
+	EmulatorInstance = "test-instance"
+)
+
+// TestBackend represents a Spanner-compatible backend for testing.
+type TestBackend interface {
 	Name() string
 	Setup(ctx context.Context, t *testing.T, ddl []string) (client *spanner.Client, cleanup func())
 }
 
-// backends returns the list of available test backends.
-func backends() []testBackend {
-	bs := []testBackend{
-		&serverBackend{},
+// AdminBackend extends TestBackend with admin client access.
+type AdminBackend interface {
+	Name() string
+	SetupWithAdmin(ctx context.Context, t *testing.T, ddl []string) (client *spanner.Client, adminClient *database.DatabaseAdminClient, dbPath string, cleanup func())
+}
+
+// Backends returns the list of available test backends.
+func Backends() []TestBackend {
+	bs := []TestBackend{
+		&ServerBackend{},
 	}
 	if os.Getenv("SPANNER_EMULATOR_HOST") != "" {
-		bs = append(bs, &emulatorBackend{})
+		bs = append(bs, &EmulatorBackend{})
 	}
 	return bs
 }
 
-// runCompat runs a test function against all available backends.
-func runCompat(t *testing.T, ddl []string, fn func(context.Context, *testing.T, *spanner.Client)) {
+// AdminBackends returns the list of available admin backends.
+func AdminBackends() []AdminBackend {
+	return []AdminBackend{&ServerBackend{}}
+}
+
+// RunCompat runs a test function against all available backends.
+func RunCompat(t *testing.T, ddl []string, fn func(context.Context, *testing.T, *spanner.Client)) {
 	t.Helper()
-	for _, b := range backends() {
+	for _, b := range Backends() {
 		t.Run(b.Name(), func(t *testing.T) {
 			ctx := context.Background()
 			client, cleanup := b.Setup(ctx, t, ddl)
@@ -50,17 +70,26 @@ func runCompat(t *testing.T, ddl []string, fn func(context.Context, *testing.T, 
 	}
 }
 
-const (
-	serverProject  = "test-project"
-	serverInstance = "test-instance"
-	serverDatabase = "test-db"
-)
+// RunCompatWithAdmin runs a test function against all available admin backends.
+func RunCompatWithAdmin(t *testing.T, ddl []string, fn func(context.Context, *testing.T, *spanner.Client, *database.DatabaseAdminClient, string)) {
+	t.Helper()
+	for _, b := range AdminBackends() {
+		t.Run(b.Name(), func(t *testing.T) {
+			ctx := context.Background()
+			client, adminClient, dbPath, cleanup := b.SetupWithAdmin(ctx, t, ddl)
+			defer cleanup()
+			fn(ctx, t, client, adminClient, dbPath)
+		})
+	}
+}
 
-type serverBackend struct{}
+// ServerBackend is a backend that starts an in-process go-spanner-server.
+// It implements both TestBackend and AdminBackend.
+type ServerBackend struct{}
 
-func (b *serverBackend) Name() string { return "go-spanner-server" }
+func (b *ServerBackend) Name() string { return "go-spanner-server" }
 
-func (b *serverBackend) Setup(ctx context.Context, t *testing.T, ddl []string) (*spanner.Client, func()) {
+func (b *ServerBackend) SetupWithAdmin(ctx context.Context, t *testing.T, ddl []string) (*spanner.Client, *database.DatabaseAdminClient, string, func()) {
 	t.Helper()
 
 	srv := spannerserver.New()
@@ -77,10 +106,10 @@ func (b *serverBackend) Setup(ctx context.Context, t *testing.T, ddl []string) (
 		t.Fatalf("failed to create admin client: %v", err)
 	}
 
-	instancePath := fmt.Sprintf("projects/%s/instances/%s", serverProject, serverInstance)
+	instancePath := fmt.Sprintf("projects/%s/instances/%s", ServerProject, ServerInstance)
 	op, err := adminClient.CreateDatabase(ctx, &databasepb.CreateDatabaseRequest{
 		Parent:          instancePath,
-		CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", serverDatabase),
+		CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", ServerDatabase),
 		ExtraStatements: ddl,
 	})
 	if err != nil {
@@ -90,7 +119,7 @@ func (b *serverBackend) Setup(ctx context.Context, t *testing.T, ddl []string) (
 		t.Fatalf("failed to wait for database creation: %v", err)
 	}
 
-	dbPath := fmt.Sprintf("%s/databases/%s", instancePath, serverDatabase)
+	dbPath := fmt.Sprintf("%s/databases/%s", instancePath, ServerDatabase)
 	client, err := spanner.NewClient(ctx, dbPath,
 		option.WithGRPCConn(conn),
 		option.WithoutAuthentication(),
@@ -105,13 +134,14 @@ func (b *serverBackend) Setup(ctx context.Context, t *testing.T, ddl []string) (
 		conn.Close()
 		srv.Stop()
 	}
-	return client, cleanup
+	return client, adminClient, dbPath, cleanup
 }
 
-const (
-	emulatorProject  = "test-project"
-	emulatorInstance = "test-instance"
-)
+func (b *ServerBackend) Setup(ctx context.Context, t *testing.T, ddl []string) (*spanner.Client, func()) {
+	t.Helper()
+	client, _, _, cleanup := b.SetupWithAdmin(ctx, t, ddl)
+	return client, cleanup
+}
 
 var (
 	emulatorOnce     sync.Once
@@ -119,11 +149,13 @@ var (
 	emulatorDBSeq    atomic.Int64
 )
 
-type emulatorBackend struct{}
+// EmulatorBackend is a backend that connects to a Cloud Spanner emulator.
+// Requires SPANNER_EMULATOR_HOST to be set.
+type EmulatorBackend struct{}
 
-func (b *emulatorBackend) Name() string { return "emulator" }
+func (b *EmulatorBackend) Name() string { return "emulator" }
 
-func (b *emulatorBackend) Setup(ctx context.Context, t *testing.T, ddl []string) (*spanner.Client, func()) {
+func (b *EmulatorBackend) Setup(ctx context.Context, t *testing.T, ddl []string) (*spanner.Client, func()) {
 	t.Helper()
 
 	emulatorOnce.Do(func() {
@@ -134,7 +166,7 @@ func (b *emulatorBackend) Setup(ctx context.Context, t *testing.T, ddl []string)
 	}
 
 	dbName := fmt.Sprintf("testdb%d", emulatorDBSeq.Add(1))
-	instancePath := fmt.Sprintf("projects/%s/instances/%s", emulatorProject, emulatorInstance)
+	instancePath := fmt.Sprintf("projects/%s/instances/%s", EmulatorProject, EmulatorInstance)
 
 	adminClient, err := database.NewDatabaseAdminClient(ctx,
 		option.WithoutAuthentication(),
@@ -186,10 +218,10 @@ func createEmulatorInstance(ctx context.Context) error {
 	defer instanceAdmin.Close()
 
 	op, err := instanceAdmin.CreateInstance(ctx, &instancepb.CreateInstanceRequest{
-		Parent:     fmt.Sprintf("projects/%s", emulatorProject),
-		InstanceId: emulatorInstance,
+		Parent:     fmt.Sprintf("projects/%s", EmulatorProject),
+		InstanceId: EmulatorInstance,
 		Instance: &instancepb.Instance{
-			DisplayName: emulatorInstance,
+			DisplayName: EmulatorInstance,
 		},
 	})
 	if err != nil {

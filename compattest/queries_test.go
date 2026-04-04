@@ -1,7 +1,11 @@
 package compattest
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/uji/go-spanner-server/compattest/testutil"
+)
 
 func TestCompat_Queries(t *testing.T) {
-	runTestFiles(t, "testdata/queries/*.sql")
+	testutil.RunTestFiles(t, "testdata/queries/*.sql")
 }

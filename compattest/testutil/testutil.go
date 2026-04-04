@@ -74,7 +74,6 @@ func ExtractDDL(sections []Section) []string {
 	return ddl
 }
 
-
 // FormatRow formats a spanner.Row as a "(val1, val2, ...)" string.
 func FormatRow(row *spanner.Row) string {
 	vals := make([]string, row.Size())
