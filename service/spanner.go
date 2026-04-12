@@ -309,6 +309,39 @@ func (s *SpannerServer) ExecuteStreamingSql(req *sppb.ExecuteSqlRequest, stream 
 		return err
 	}
 
+	if isDML(req.Sql) {
+		var inlineTxID []byte
+		if sel, ok := req.Transaction.GetSelector().(*sppb.TransactionSelector_Begin); ok {
+			readOnly := false
+			if sel.Begin != nil {
+				if _, ok := sel.Begin.Mode.(*sppb.TransactionOptions_ReadOnly_); ok {
+					readOnly = true
+				}
+			}
+			tx, err := s.sessions.BeginTransaction(req.Session, readOnly)
+			if err != nil {
+				return status.Errorf(codes.NotFound, "%v", err)
+			}
+			inlineTxID = tx.ID
+		}
+
+		rowCount, err := engine.ExecuteDML(db, req.Sql)
+		if err != nil {
+			return status.Errorf(codes.InvalidArgument, "execute DML: %v", err)
+		}
+		prs := &sppb.PartialResultSet{
+			Stats: &sppb.ResultSetStats{
+				RowCount: &sppb.ResultSetStats_RowCountExact{RowCountExact: rowCount},
+			},
+		}
+		if inlineTxID != nil {
+			prs.Metadata = &sppb.ResultSetMetadata{
+				Transaction: &sppb.Transaction{Id: inlineTxID},
+			}
+		}
+		return stream.Send(prs)
+	}
+
 	result, err := engine.Execute(db, req.Sql)
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "execute SQL: %v", err)

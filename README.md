@@ -101,7 +101,7 @@ func TestExample(t *testing.T) {
 - **DDL**: `CREATE TABLE` (INT64, STRING, BOOL, FLOAT64, BYTES, TIMESTAMP, ARRAY, STRUCT), `CREATE INDEX`, `DROP INDEX`, `DROP TABLE`
 - **Mutations**: Insert, InsertOrUpdate, Update, Replace, Delete
 - **Read**: `StreamingRead` (AllKeys, point lookups, key ranges), `ReadUsingIndex`, `ExecuteStreamingSql` (SELECT with WHERE clause, ORDER BY)
-- **DML**: `INSERT INTO ... VALUES (...)` (via `ExecuteSql`)
+- **DML**: `INSERT INTO ... VALUES (...)`, `UPDATE ... SET ... WHERE ...`, `DELETE FROM ... WHERE ...` (via `ExecuteSql` / `ExecuteStreamingSql`)
 - **Secondary Indexes**: UNIQUE, NULL_FILTERED, STORING, ASC/DESC key ordering
 - **Interleaved Tables**: `INTERLEAVE IN PARENT`, `ON DELETE CASCADE`, `ON DELETE NO ACTION`, referential integrity enforcement
 - **Sessions**: CreateSession, BatchCreateSessions, GetSession, DeleteSession
@@ -110,6 +110,5 @@ func TestExample(t *testing.T) {
 
 ### Not yet supported
 
-- UPDATE / DELETE (DML)
 - Optimistic locking (timestamps)
 - SQL functions and expressions

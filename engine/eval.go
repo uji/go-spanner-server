@@ -164,9 +164,56 @@ func evalBinaryExpr(ctx *evalContext, e *ast.BinaryExpr) (any, error) {
 		return cmp <= 0, nil
 	case ast.OpGreaterEqual:
 		return cmp >= 0, nil
+	case ast.OpAdd:
+		return evalArithmetic(left, right,
+			func(a, b int64) (any, error) { return a + b, nil },
+			func(a, b float64) (any, error) { return a + b, nil })
+	case ast.OpSub:
+		return evalArithmetic(left, right,
+			func(a, b int64) (any, error) { return a - b, nil },
+			func(a, b float64) (any, error) { return a - b, nil })
+	case ast.OpMul:
+		return evalArithmetic(left, right,
+			func(a, b int64) (any, error) { return a * b, nil },
+			func(a, b float64) (any, error) { return a * b, nil })
+	case ast.OpDiv:
+		return evalArithmetic(left, right,
+			func(a, b int64) (any, error) {
+				if b == 0 {
+					return nil, fmt.Errorf("division by zero")
+				}
+				return a / b, nil
+			},
+			func(a, b float64) (any, error) {
+				if b == 0 {
+					return nil, fmt.Errorf("division by zero")
+				}
+				return a / b, nil
+			})
 	default:
 		return nil, fmt.Errorf("unsupported binary operator: %s", e.Op)
 	}
+}
+
+// evalArithmetic performs arithmetic on two numeric values, promoting int64 to float64 when mixed.
+func evalArithmetic(left, right any, intOp func(int64, int64) (any, error), floatOp func(float64, float64) (any, error)) (any, error) {
+	switch l := left.(type) {
+	case int64:
+		switch r := right.(type) {
+		case int64:
+			return intOp(l, r)
+		case float64:
+			return floatOp(float64(l), r)
+		}
+	case float64:
+		switch r := right.(type) {
+		case int64:
+			return floatOp(l, float64(r))
+		case float64:
+			return floatOp(l, r)
+		}
+	}
+	return nil, fmt.Errorf("arithmetic not supported for types %T and %T", left, right)
 }
 
 func evalUnaryExpr(ctx *evalContext, e *ast.UnaryExpr) (any, error) {

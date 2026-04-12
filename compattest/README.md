@@ -8,7 +8,7 @@ This package provides a dual-backend compatibility testing framework for go-span
 - **`testcase_test.go`** — Data-driven test framework: txtar parser, DML executor, query runner, and result formatter.
 - **`testdata/`** — Data-driven test case files in txtar format (`.sql` extension). Adding a file here automatically adds a test case.
 - **`mutations_test.go`** — Mutation API test cases (Insert, Update, Delete, Replace, InsertOrUpdate, etc.).
-- **`queries_test.go`** — Query test cases. Discovers and runs all files in `testdata/queries/*.sql`.
+- **`dmls_test.go`** — DML and query test cases. Discovers and runs all files in `testdata/dmls/*.sql`.
 
 ## Running Tests
 
@@ -41,7 +41,7 @@ make test-compat
 
 ### Data-driven tests (query tests) — recommended
 
-Create a `.sql` file in `testdata/queries/`. The file is picked up automatically without any Go code changes.
+Create a `.sql` file in `testdata/dmls/`. The file is picked up automatically without any Go code changes.
 
 **File format (txtar):**
 
