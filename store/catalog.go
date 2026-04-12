@@ -60,10 +60,18 @@ func (db *Database) applyCreateTable(ct *ast.CreateTable, rawSQL string) error {
 	for _, colDef := range ct.Columns {
 		colType := extractColType(colDef.Type)
 		notNull := colDef.NotNull
+		allowCommitTS, err := extractAllowCommitTimestamp(colDef)
+		if err != nil {
+			return err
+		}
+		if allowCommitTS && colType.Name != TypeTimestamp {
+			return fmt.Errorf("column %q: OPTIONS (allow_commit_timestamp = true) is only valid on TIMESTAMP columns", colDef.Name.Name)
+		}
 		cols = append(cols, ColInfo{
-			Name:    colDef.Name.Name,
-			Type:    colType,
-			NotNull: notNull,
+			Name:                 colDef.Name.Name,
+			Type:                 colType,
+			NotNull:              notNull,
+			AllowCommitTimestamp: allowCommitTS,
 		})
 	}
 
@@ -289,6 +297,10 @@ func (db *Database) applyAlterTable(at *ast.AlterTable, rawSQL string) error {
 		if err := db.dropConstraint(table, alt.Name.Name); err != nil {
 			return err
 		}
+	case *ast.AlterColumn:
+		if err := db.applyAlterColumn(table, alt); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unsupported ALTER TABLE operation: %T", at.TableAlteration)
 	}
@@ -395,6 +407,63 @@ func extractColType(typ ast.SchemaType) ColType {
 	default:
 		return ScalarColType(TypeString)
 	}
+}
+
+// applyAlterColumn applies an ALTER COLUMN operation to a table.
+func (db *Database) applyAlterColumn(table *Table, alt *ast.AlterColumn) error {
+	colName := alt.Name.Name
+	colIdx, ok := table.ColIndex[colName]
+	if !ok {
+		return fmt.Errorf("column %q not found in table %q", colName, table.Name)
+	}
+
+	setOpts, ok := alt.Alteration.(*ast.AlterColumnSetOptions)
+	if !ok {
+		return fmt.Errorf("unsupported ALTER COLUMN operation: %T", alt.Alteration)
+	}
+
+	for _, rec := range setOpts.Options.Records {
+		switch strings.ToLower(rec.Name.Name) {
+		case "allow_commit_timestamp":
+			switch v := rec.Value.(type) {
+			case *ast.BoolLiteral:
+				if v.Value && table.Cols[colIdx].Type.Name != TypeTimestamp {
+					return fmt.Errorf("column %q: OPTIONS (allow_commit_timestamp = true) is only valid on TIMESTAMP columns", colName)
+				}
+				table.Cols[colIdx].AllowCommitTimestamp = v.Value
+			case *ast.NullLiteral:
+				table.Cols[colIdx].AllowCommitTimestamp = false
+			default:
+				return fmt.Errorf("column %q: allow_commit_timestamp must be a bool or null, got %T", colName, rec.Value)
+			}
+		default:
+			return fmt.Errorf("unknown column option %q", rec.Name.Name)
+		}
+	}
+	return nil
+}
+
+// extractAllowCommitTimestamp returns true if the column definition has OPTIONS (allow_commit_timestamp = true).
+func extractAllowCommitTimestamp(colDef *ast.ColumnDef) (bool, error) {
+	if colDef.Options == nil {
+		return false, nil
+	}
+	for _, rec := range colDef.Options.Records {
+		switch strings.ToLower(rec.Name.Name) {
+		case "allow_commit_timestamp":
+			switch v := rec.Value.(type) {
+			case *ast.BoolLiteral:
+				return v.Value, nil
+			case *ast.NullLiteral:
+				return false, nil
+			default:
+				return false, fmt.Errorf("column %q: allow_commit_timestamp must be a bool or null, got %T", colDef.Name.Name, rec.Value)
+			}
+		default:
+			return false, fmt.Errorf("unknown column option %q", rec.Name.Name)
+		}
+	}
+	return false, nil
 }
 
 // GetTable returns a table by name.

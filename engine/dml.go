@@ -2,7 +2,7 @@ package engine
 
 import (
 	"fmt"
-	"strconv"
+	"time"
 
 	"github.com/cloudspannerecosystem/memefish"
 	"github.com/cloudspannerecosystem/memefish/ast"
@@ -10,20 +10,22 @@ import (
 )
 
 // ExecuteDML executes an INSERT, UPDATE, or DELETE statement and returns the number of affected rows.
-func ExecuteDML(db *store.Database, sql string) (int64, error) {
+// commitTS is the commit timestamp for the enclosing transaction; it is used by PENDING_COMMIT_TIMESTAMP().
+// Pass time.Now() for auto-commit DML executed outside an explicit transaction.
+func ExecuteDML(db *store.Database, sql string, commitTS time.Time) (int64, error) {
 	dml, err := memefish.ParseDML("", sql)
 	if err != nil {
 		return 0, fmt.Errorf("parse DML: %w", err)
 	}
-	return executeDML(db, dml)
+	return executeDML(db, dml, commitTS)
 }
 
-func executeDML(db *store.Database, dml ast.DML) (int64, error) {
+func executeDML(db *store.Database, dml ast.DML, commitTS time.Time) (int64, error) {
 	switch d := dml.(type) {
 	case *ast.Insert:
-		return executeInsert(db, d)
+		return executeInsert(db, d, commitTS)
 	case *ast.Update:
-		return executeUpdate(db, d)
+		return executeUpdate(db, d, commitTS)
 	case *ast.Delete:
 		return executeDelete(db, d)
 	default:
@@ -31,7 +33,7 @@ func executeDML(db *store.Database, dml ast.DML) (int64, error) {
 	}
 }
 
-func executeInsert(db *store.Database, ins *ast.Insert) (int64, error) {
+func executeInsert(db *store.Database, ins *ast.Insert, commitTS time.Time) (int64, error) {
 	tableName := ins.TableName.Idents[0].Name
 	table, err := db.GetTable(tableName)
 	if err != nil {
@@ -48,11 +50,18 @@ func executeInsert(db *store.Database, ins *ast.Insert) (int64, error) {
 		return 0, fmt.Errorf("unsupported INSERT input type: %T", ins.Input)
 	}
 
+	// Use a context with no current row (INSERT has no source row).
+	ctx := &evalContext{
+		colIndex: table.ColIndex,
+		cols:     table.Cols,
+		commitTS: commitTS,
+	}
+
 	var rowCount int64
 	for _, row := range input.Rows {
 		vals := make([]any, len(row.Exprs))
 		for i, expr := range row.Exprs {
-			v, err := evalLiteral(expr.Expr)
+			v, err := evalExpr(ctx, expr.Expr)
 			if err != nil {
 				return 0, fmt.Errorf("column %s: %w", cols[i], err)
 			}
@@ -73,7 +82,7 @@ func executeInsert(db *store.Database, ins *ast.Insert) (int64, error) {
 	return rowCount, nil
 }
 
-func executeUpdate(db *store.Database, upd *ast.Update) (int64, error) {
+func executeUpdate(db *store.Database, upd *ast.Update, commitTS time.Time) (int64, error) {
 	tableName := upd.TableName.Idents[0].Name
 	table, err := db.GetTable(tableName)
 	if err != nil {
@@ -99,7 +108,7 @@ func executeUpdate(db *store.Database, upd *ast.Update) (int64, error) {
 	}
 	allRows := table.ReadAll(allIndexes)
 
-	ctx := &evalContext{colIndex: table.ColIndex, cols: table.Cols}
+	ctx := &evalContext{colIndex: table.ColIndex, cols: table.Cols, commitTS: commitTS}
 	var rowCount int64
 	for _, row := range allRows {
 		ctx.row = row
@@ -147,6 +156,8 @@ func executeUpdate(db *store.Database, upd *ast.Update) (int64, error) {
 	return rowCount, nil
 }
 
+// executeDelete does not accept a commitTS because PENDING_COMMIT_TIMESTAMP() is not valid
+// in DELETE statements — DELETE does not write column values.
 func executeDelete(db *store.Database, del *ast.Delete) (int64, error) {
 	if del.Where == nil {
 		return 0, fmt.Errorf("DELETE requires a WHERE clause; use WHERE true to delete all rows")
@@ -189,42 +200,3 @@ func executeDelete(db *store.Database, del *ast.Delete) (int64, error) {
 	return int64(len(keys)), nil
 }
 
-// evalLiteral converts a memefish literal expression to a Go value.
-func evalLiteral(expr ast.Expr) (any, error) {
-	switch e := expr.(type) {
-	case *ast.IntLiteral:
-		v, err := strconv.ParseInt(e.Value, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse int %q: %w", e.Value, err)
-		}
-		return v, nil
-	case *ast.StringLiteral:
-		return e.Value, nil
-	case *ast.NullLiteral:
-		return nil, nil
-	case *ast.BoolLiteral:
-		return e.Value, nil
-	case *ast.FloatLiteral:
-		v, err := strconv.ParseFloat(e.Value, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse float %q: %w", e.Value, err)
-		}
-		return v, nil
-	case *ast.UnaryExpr:
-		inner, err := evalLiteral(e.Expr)
-		if err != nil {
-			return nil, err
-		}
-		if e.Op == ast.OpMinus {
-			switch v := inner.(type) {
-			case int64:
-				return -v, nil
-			case float64:
-				return -v, nil
-			}
-		}
-		return nil, fmt.Errorf("unsupported unary op %q on %T", e.Op, inner)
-	default:
-		return nil, fmt.Errorf("unsupported expression type: %T", expr)
-	}
-}

@@ -345,3 +345,77 @@ func TestOrderBy_WithWhere(t *testing.T) {
 		}
 	}
 }
+
+// --- LIMIT / OFFSET tests ---
+
+func TestLimit_Basic(t *testing.T) {
+	db := setupTestDB(t)
+	ids := queryIDs(t, db, "SELECT SingerId FROM Singers ORDER BY SingerId LIMIT 2")
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 rows, got %d: %v", len(ids), ids)
+	}
+	if ids[0] != 1 || ids[1] != 2 {
+		t.Errorf("expected [1 2], got %v", ids)
+	}
+}
+
+func TestLimit_WithOffset(t *testing.T) {
+	db := setupTestDB(t)
+	ids := queryIDs(t, db, "SELECT SingerId FROM Singers ORDER BY SingerId LIMIT 2 OFFSET 1")
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 rows, got %d: %v", len(ids), ids)
+	}
+	if ids[0] != 2 || ids[1] != 3 {
+		t.Errorf("expected [2 3], got %v", ids)
+	}
+}
+
+func TestLimit_OffsetBeyondEnd(t *testing.T) {
+	db := setupTestDB(t)
+	ids := queryIDs(t, db, "SELECT SingerId FROM Singers ORDER BY SingerId LIMIT 10 OFFSET 100")
+	if len(ids) != 0 {
+		t.Errorf("expected 0 rows, got %d: %v", len(ids), ids)
+	}
+}
+
+func TestLimit_Zero(t *testing.T) {
+	db := setupTestDB(t)
+	ids := queryIDs(t, db, "SELECT SingerId FROM Singers ORDER BY SingerId LIMIT 0")
+	if len(ids) != 0 {
+		t.Errorf("expected 0 rows, got %d: %v", len(ids), ids)
+	}
+}
+
+// --- SELECT expression tests ---
+
+func TestSelect_ExpressionInList(t *testing.T) {
+	db := setupTestDB(t)
+	result, err := Execute(db, `SELECT SingerId * 2 AS doubled FROM Singers WHERE SingerId = 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(result.Rows))
+	}
+	got := result.Rows[0].Values[0].GetStringValue()
+	if got != "2" {
+		t.Errorf("expected SingerId*2=2, got %q", got)
+	}
+}
+
+func TestSelect_LiteralWithoutFrom(t *testing.T) {
+	db := store.NewDatabase()
+	result, err := Execute(db, `SELECT 42, 'hello'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(result.Rows))
+	}
+	if got := result.Rows[0].Values[0].GetStringValue(); got != "42" {
+		t.Errorf("expected '42', got %q", got)
+	}
+	if got := result.Rows[0].Values[1].GetStringValue(); got != "hello" {
+		t.Errorf("expected 'hello', got %q", got)
+	}
+}

@@ -26,9 +26,10 @@ func ScalarColType(name string) ColType {
 
 // ColInfo describes a column.
 type ColInfo struct {
-	Name    string
-	Type    ColType
-	NotNull bool
+	Name                 string
+	Type                 ColType
+	NotNull              bool
+	AllowCommitTimestamp bool
 }
 
 // OnDeleteAction specifies the action when a parent row is deleted.

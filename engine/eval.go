@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/cloudspannerecosystem/memefish/ast"
 	"github.com/uji/go-spanner-server/store"
@@ -13,6 +14,16 @@ type evalContext struct {
 	row      store.Row
 	colIndex map[string]int
 	cols     []store.ColInfo
+	// commitTS is the commit timestamp for the enclosing read-write transaction.
+	// A zero value signals that PENDING_COMMIT_TIMESTAMP() is not available (e.g. outside a
+	// read-write transaction context). Use inReadWriteTx() to check before accessing commitTS.
+	commitTS time.Time
+}
+
+// inReadWriteTx reports whether this context is executing inside a read-write transaction
+// that has a valid commit timestamp (i.e. PENDING_COMMIT_TIMESTAMP() is allowed).
+func (c *evalContext) inReadWriteTx() bool {
+	return !c.commitTS.IsZero()
 }
 
 // evalExpr evaluates an AST expression and returns the resulting Go value.
@@ -74,10 +85,87 @@ func evalExpr(ctx *evalContext, expr ast.Expr) (any, error) {
 	case *ast.BetweenExpr:
 		return evalBetweenExpr(ctx, e)
 
+	case *ast.CallExpr:
+		return evalCallExpr(ctx, e)
+
+	case *ast.CastExpr:
+		return evalCastExpr(ctx, e)
+
+	case *ast.CaseExpr:
+		return evalCaseExpr(ctx, e)
+
+	case *ast.IfExpr:
+		return evalIfExpr(ctx, e)
+
 	default:
 		return nil, fmt.Errorf("unsupported expression type: %T", expr)
 	}
 }
+
+// evalCastExpr evaluates CAST(expr AS type) and SAFE_CAST(expr AS type).
+func evalCastExpr(ctx *evalContext, e *ast.CastExpr) (any, error) {
+	val, err := evalExpr(ctx, e.Expr)
+	if err != nil {
+		return nil, err
+	}
+	result, err := castValue(val, e.Type)
+	if err != nil {
+		if e.Safe {
+			return nil, nil // SAFE_CAST returns NULL on failure
+		}
+		return nil, err
+	}
+	return result, nil
+}
+
+// evalCaseExpr evaluates CASE [expr] WHEN ... THEN ... [ELSE ...] END expressions.
+func evalCaseExpr(ctx *evalContext, e *ast.CaseExpr) (any, error) {
+	if e.Expr != nil {
+		// Simple CASE: CASE expr WHEN val THEN result ...
+		base, err := evalExpr(ctx, e.Expr)
+		if err != nil {
+			return nil, err
+		}
+		for _, w := range e.Whens {
+			cond, err := evalExpr(ctx, w.Cond)
+			if err != nil {
+				return nil, err
+			}
+			if base != nil && cond != nil && store.CompareValues(base, cond) == 0 {
+				return evalExpr(ctx, w.Then)
+			}
+		}
+	} else {
+		// Searched CASE: CASE WHEN cond THEN result ...
+		for _, w := range e.Whens {
+			cond, err := evalExpr(ctx, w.Cond)
+			if err != nil {
+				return nil, err
+			}
+			if b, ok := cond.(bool); ok && b {
+				return evalExpr(ctx, w.Then)
+			}
+		}
+	}
+	if e.Else != nil {
+		return evalExpr(ctx, e.Else.Expr)
+	}
+	return nil, nil // NULL if no branch matched and no ELSE
+}
+
+// evalIfExpr evaluates IF(cond, true_result, else_result).
+func evalIfExpr(ctx *evalContext, e *ast.IfExpr) (any, error) {
+	cond, err := evalExpr(ctx, e.Expr)
+	if err != nil {
+		return nil, err
+	}
+	b, ok := cond.(bool)
+	if ok && b {
+		return evalExpr(ctx, e.TrueResult)
+	}
+	return evalExpr(ctx, e.ElseResult)
+}
+
 
 func evalBinaryExpr(ctx *evalContext, e *ast.BinaryExpr) (any, error) {
 	// Handle logical operators first (short-circuit)

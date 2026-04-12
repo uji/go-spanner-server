@@ -98,10 +98,12 @@ func TestExample(t *testing.T) {
 
 ### Supported
 
-- **DDL**: `CREATE TABLE` (INT64, STRING, BOOL, FLOAT64, BYTES, TIMESTAMP, ARRAY, STRUCT), `CREATE INDEX`, `DROP INDEX`, `DROP TABLE`
-- **Mutations**: Insert, InsertOrUpdate, Update, Replace, Delete
-- **Read**: `StreamingRead` (AllKeys, point lookups, key ranges), `ReadUsingIndex`, `ExecuteStreamingSql` (SELECT with WHERE clause, ORDER BY)
-- **DML**: `INSERT INTO ... VALUES (...)`, `UPDATE ... SET ... WHERE ...`, `DELETE FROM ... WHERE ...` (via `ExecuteSql` / `ExecuteStreamingSql`)
+- **DDL**: `CREATE TABLE` (INT64, STRING, BOOL, FLOAT64, BYTES, TIMESTAMP, ARRAY, STRUCT), `CREATE INDEX`, `DROP INDEX`, `DROP TABLE`, `ALTER TABLE` (ADD/DROP constraint, `ALTER COLUMN SET OPTIONS`)
+- **Mutations**: Insert, InsertOrUpdate, Update, Replace, Delete; `spanner.CommitTimestamp` sentinel for commit-timestamp columns
+- **Read**: `StreamingRead` (AllKeys, point lookups, key ranges), `ReadUsingIndex`, `ExecuteStreamingSql` (SELECT with WHERE clause, ORDER BY, LIMIT/OFFSET, expressions in SELECT list)
+- **DML**: `INSERT INTO ... VALUES (...)`, `UPDATE ... SET ... WHERE ...`, `DELETE FROM ... WHERE ...` (via `ExecuteSql` / `ExecuteStreamingSql`); `PENDING_COMMIT_TIMESTAMP()` in INSERT/UPDATE
+- **Commit Timestamps**: `OPTIONS (allow_commit_timestamp = true)` on TIMESTAMP columns; `CommitTimestamp` returned in `CommitResponse`
+- **SQL Functions**: `COALESCE`, `IF`, `IFNULL`, `NULLIF`, `CAST`/`SAFE_CAST`, `CASE`/`WHEN`/`THEN`/`ELSE`; string functions (`CONCAT`, `UPPER`, `LOWER`, `LENGTH`, `SUBSTR`, `TRIM`, `LTRIM`, `RTRIM`, `STARTS_WITH`, `ENDS_WITH`, `REPLACE`, `STRPOS`, `LPAD`, `RPAD`, `REVERSE`, `REPEAT`); math functions (`ABS`, `MOD`, `CEIL`, `FLOOR`, `ROUND`, `SIGN`, `GREATEST`, `LEAST`); `CURRENT_TIMESTAMP`, `GENERATE_UUID`, `PENDING_COMMIT_TIMESTAMP`
 - **Secondary Indexes**: UNIQUE, NULL_FILTERED, STORING, ASC/DESC key ordering
 - **Interleaved Tables**: `INTERLEAVE IN PARENT`, `ON DELETE CASCADE`, `ON DELETE NO ACTION`, referential integrity enforcement
 - **Sessions**: CreateSession, BatchCreateSessions, GetSession, DeleteSession
@@ -110,5 +112,10 @@ func TestExample(t *testing.T) {
 
 ### Not yet supported
 
-- Optimistic locking (timestamps)
-- SQL functions and expressions
+- Aggregate functions (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `ARRAY_AGG`, etc.) and `GROUP BY` / `HAVING`
+- `JOIN` (INNER, LEFT, RIGHT, CROSS)
+- Subqueries and CTEs (`WITH`)
+- `DISTINCT`
+- `UNION` / `INTERSECT` / `EXCEPT`
+- Window functions
+- Additional SQL functions (regex, JSON, date arithmetic, etc.)

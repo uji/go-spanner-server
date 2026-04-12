@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/uji/go-spanner-server/engine"
 	"github.com/uji/go-spanner-server/store"
@@ -15,7 +16,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// commitTimestampSentinel is the sentinel string value that the Spanner client library sends
+// when the caller uses spanner.CommitTimestamp in a mutation.
+const commitTimestampSentinel = "spanner.commit_timestamp()"
 
 // SpannerServer implements sppb.SpannerServer.
 type SpannerServer struct {
@@ -90,23 +96,26 @@ func (s *SpannerServer) Commit(ctx context.Context, req *sppb.CommitRequest) (*s
 		return nil, err
 	}
 
+	// Generate a commit timestamp for this transaction.
+	commitTS := time.Now()
+
 	// Apply mutations
 	for _, mut := range req.Mutations {
 		switch op := mut.Operation.(type) {
 		case *sppb.Mutation_Insert:
-			if err := s.applyInsert(db, op.Insert); err != nil {
+			if err := s.applyInsert(db, op.Insert, commitTS); err != nil {
 				return nil, status.Errorf(codes.InvalidArgument, "insert: %v", err)
 			}
 		case *sppb.Mutation_InsertOrUpdate:
-			if err := s.applyReplace(db, op.InsertOrUpdate); err != nil {
+			if err := s.applyReplace(db, op.InsertOrUpdate, commitTS); err != nil {
 				return nil, status.Errorf(codes.InvalidArgument, "insert_or_update: %v", err)
 			}
 		case *sppb.Mutation_Update:
-			if err := s.applyUpdate(db, op.Update); err != nil {
+			if err := s.applyUpdate(db, op.Update, commitTS); err != nil {
 				return nil, status.Errorf(codes.InvalidArgument, "update: %v", err)
 			}
 		case *sppb.Mutation_Replace:
-			if err := s.applyReplace(db, op.Replace); err != nil {
+			if err := s.applyReplace(db, op.Replace, commitTS); err != nil {
 				return nil, status.Errorf(codes.InvalidArgument, "replace: %v", err)
 			}
 		case *sppb.Mutation_Delete_:
@@ -118,10 +127,12 @@ func (s *SpannerServer) Commit(ctx context.Context, req *sppb.CommitRequest) (*s
 		}
 	}
 
-	return &sppb.CommitResponse{}, nil
+	return &sppb.CommitResponse{
+		CommitTimestamp: timestamppb.New(commitTS),
+	}, nil
 }
 
-func (s *SpannerServer) decodeWrite(db *store.Database, write *sppb.Mutation_Write) (*store.Table, []string, [][]any, error) {
+func (s *SpannerServer) decodeWrite(db *store.Database, write *sppb.Mutation_Write, commitTS time.Time) (*store.Table, []string, [][]any, error) {
 	table, err := db.GetTable(write.Table)
 	if err != nil {
 		return nil, nil, nil, err
@@ -136,7 +147,18 @@ func (s *SpannerServer) decodeWrite(db *store.Database, write *sppb.Mutation_Wri
 			if !ok {
 				return nil, nil, nil, fmt.Errorf("column %q not found", cols[j])
 			}
-			d, err := store.DecodeValue(v, table.Cols[colIdx].Type)
+			col := table.Cols[colIdx]
+			// Detect commit timestamp sentinel before decoding.
+			if col.Type.Name == store.TypeTimestamp {
+				if sv, ok := v.GetKind().(*structpb.Value_StringValue); ok && strings.EqualFold(sv.StringValue, commitTimestampSentinel) {
+					if !col.AllowCommitTimestamp {
+						return nil, nil, nil, fmt.Errorf("column %q does not allow commit timestamp; set OPTIONS (allow_commit_timestamp = true)", cols[j])
+					}
+					vals[j] = commitTS
+					continue
+				}
+			}
+			d, err := store.DecodeValue(v, col.Type)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("decode column %q: %w", cols[j], err)
 			}
@@ -147,8 +169,8 @@ func (s *SpannerServer) decodeWrite(db *store.Database, write *sppb.Mutation_Wri
 	return table, cols, decoded, nil
 }
 
-func (s *SpannerServer) applyInsert(db *store.Database, write *sppb.Mutation_Write) error {
-	table, cols, rows, err := s.decodeWrite(db, write)
+func (s *SpannerServer) applyInsert(db *store.Database, write *sppb.Mutation_Write, commitTS time.Time) error {
+	table, cols, rows, err := s.decodeWrite(db, write, commitTS)
 	if err != nil {
 		return err
 	}
@@ -160,8 +182,8 @@ func (s *SpannerServer) applyInsert(db *store.Database, write *sppb.Mutation_Wri
 	return nil
 }
 
-func (s *SpannerServer) applyUpdate(db *store.Database, write *sppb.Mutation_Write) error {
-	table, cols, rows, err := s.decodeWrite(db, write)
+func (s *SpannerServer) applyUpdate(db *store.Database, write *sppb.Mutation_Write, commitTS time.Time) error {
+	table, cols, rows, err := s.decodeWrite(db, write, commitTS)
 	if err != nil {
 		return err
 	}
@@ -173,8 +195,8 @@ func (s *SpannerServer) applyUpdate(db *store.Database, write *sppb.Mutation_Wri
 	return nil
 }
 
-func (s *SpannerServer) applyReplace(db *store.Database, write *sppb.Mutation_Write) error {
-	table, cols, rows, err := s.decodeWrite(db, write)
+func (s *SpannerServer) applyReplace(db *store.Database, write *sppb.Mutation_Write, commitTS time.Time) error {
+	table, cols, rows, err := s.decodeWrite(db, write, commitTS)
 	if err != nil {
 		return err
 	}
@@ -259,7 +281,12 @@ func (s *SpannerServer) ExecuteSql(ctx context.Context, req *sppb.ExecuteSqlRequ
 			inlineTxID = tx.ID
 		}
 
-		rowCount, err := engine.ExecuteDML(db, req.Sql)
+		// TODO: For DML inside an explicit read-write transaction, the commit timestamp
+		// should be the same as the one returned in CommitResponse. Currently it uses
+		// time.Now() independently, so PENDING_COMMIT_TIMESTAMP() values in DML will
+		// diverge from the transaction's CommitTimestamp. This requires storing the
+		// commit timestamp per-transaction in SessionManager to fix properly.
+		rowCount, err := engine.ExecuteDML(db, req.Sql, time.Now())
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "execute DML: %v", err)
 		}
@@ -325,7 +352,9 @@ func (s *SpannerServer) ExecuteStreamingSql(req *sppb.ExecuteSqlRequest, stream 
 			inlineTxID = tx.ID
 		}
 
-		rowCount, err := engine.ExecuteDML(db, req.Sql)
+		// TODO: Same limitation as in ExecuteSql — DML commit timestamps diverge from
+		// the transaction's CommitTimestamp for explicit read-write transactions.
+		rowCount, err := engine.ExecuteDML(db, req.Sql, time.Now())
 		if err != nil {
 			return status.Errorf(codes.InvalidArgument, "execute DML: %v", err)
 		}
