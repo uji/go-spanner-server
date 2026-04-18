@@ -18,6 +18,10 @@ type evalContext struct {
 	// A zero value signals that PENDING_COMMIT_TIMESTAMP() is not available (e.g. outside a
 	// read-write transaction context). Use inReadWriteTx() to check before accessing commitTS.
 	commitTS time.Time
+	// aggValues holds pre-computed aggregate function results for GROUP BY evaluation.
+	// Keys are pointers to aggregate AST nodes (CountStarExpr or CallExpr);
+	// values are the computed results. Nil outside an aggregate context.
+	aggValues map[ast.Expr]any
 }
 
 // inReadWriteTx reports whether this context is executing inside a read-write transaction
@@ -84,6 +88,15 @@ func evalExpr(ctx *evalContext, expr ast.Expr) (any, error) {
 
 	case *ast.BetweenExpr:
 		return evalBetweenExpr(ctx, e)
+
+	case *ast.CountStarExpr:
+		// COUNT(*) is only valid inside an aggregate context.
+		if ctx.aggValues != nil {
+			if v, ok := ctx.aggValues[e]; ok {
+				return v, nil
+			}
+		}
+		return nil, fmt.Errorf("COUNT(*) is only valid in an aggregate context")
 
 	case *ast.CallExpr:
 		return evalCallExpr(ctx, e)

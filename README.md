@@ -104,6 +104,8 @@ func TestExample(t *testing.T) {
 - **DML**: `INSERT INTO ... VALUES (...)`, `UPDATE ... SET ... WHERE ...`, `DELETE FROM ... WHERE ...` (via `ExecuteSql` / `ExecuteStreamingSql`); `PENDING_COMMIT_TIMESTAMP()` in INSERT/UPDATE
 - **Commit Timestamps**: `OPTIONS (allow_commit_timestamp = true)` on TIMESTAMP columns; `CommitTimestamp` returned in `CommitResponse`
 - **SQL Functions**: `COALESCE`, `IF`, `IFNULL`, `NULLIF`, `CAST`/`SAFE_CAST`, `CASE`/`WHEN`/`THEN`/`ELSE`; string functions (`CONCAT`, `UPPER`, `LOWER`, `LENGTH`, `SUBSTR`, `TRIM`, `LTRIM`, `RTRIM`, `STARTS_WITH`, `ENDS_WITH`, `REPLACE`, `STRPOS`, `LPAD`, `RPAD`, `REVERSE`, `REPEAT`); math functions (`ABS`, `MOD`, `CEIL`, `FLOOR`, `ROUND`, `SIGN`, `GREATEST`, `LEAST`); `CURRENT_TIMESTAMP`, `GENERATE_UUID`, `PENDING_COMMIT_TIMESTAMP`
+- **Aggregate functions**: `COUNT(*)`, `COUNT(expr)`, `SUM`, `AVG`, `MIN`, `MAX`, `COUNT_IF`, `ANY_VALUE`; `GROUP BY` (single/multiple columns); `HAVING`
+- **`DISTINCT`**: `SELECT DISTINCT` for deduplicating result rows
 - **Secondary Indexes**: UNIQUE, NULL_FILTERED, STORING, ASC/DESC key ordering
 - **Interleaved Tables**: `INTERLEAVE IN PARENT`, `ON DELETE CASCADE`, `ON DELETE NO ACTION`, referential integrity enforcement
 - **Sessions**: CreateSession, BatchCreateSessions, GetSession, DeleteSession
@@ -112,10 +114,9 @@ func TestExample(t *testing.T) {
 
 ### Not yet supported
 
-- Aggregate functions (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `ARRAY_AGG`, etc.) and `GROUP BY` / `HAVING`
+- `ARRAY_AGG` and other array aggregate functions
 - `JOIN` (INNER, LEFT, RIGHT, CROSS)
 - Subqueries and CTEs (`WITH`)
-- `DISTINCT`
 - `UNION` / `INTERSECT` / `EXCEPT`
 - Window functions
 - Additional SQL functions (regex, JSON, date arithmetic, etc.)

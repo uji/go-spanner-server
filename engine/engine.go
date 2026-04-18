@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cloudspannerecosystem/memefish"
@@ -170,7 +171,6 @@ func executeSelectLiteral(sel *ast.Select) (*Result, error) {
 
 // applyOrderBy sorts result rows by the ORDER BY clause.
 func applyOrderBy(result *Result, orderBy *ast.OrderBy) error {
-	// Resolve column indexes for ORDER BY items
 	type orderKey struct {
 		colIdx   int
 		typeCode sppb.TypeCode
@@ -178,20 +178,31 @@ func applyOrderBy(result *Result, orderBy *ast.OrderBy) error {
 	}
 	var keys []orderKey
 	for _, item := range orderBy.Items {
-		ident, ok := item.Expr.(*ast.Ident)
-		if !ok {
+		colIdx := -1
+
+		switch e := item.Expr.(type) {
+		case *ast.Ident:
+			// Look up by column name or alias.
+			for i, col := range result.Columns {
+				if strings.EqualFold(col.Name, e.Name) {
+					colIdx = i
+					break
+				}
+			}
+			if colIdx < 0 {
+				return fmt.Errorf("column %q not found in ORDER BY", e.Name)
+			}
+		case *ast.IntLiteral:
+			// 1-based column position.
+			pos, err := strconv.ParseInt(e.Value, 10, 64)
+			if err != nil || pos < 1 || int(pos) > len(result.Columns) {
+				return fmt.Errorf("invalid ORDER BY column position: %s", e.Value)
+			}
+			colIdx = int(pos) - 1
+		default:
 			return fmt.Errorf("unsupported ORDER BY expression: %T", item.Expr)
 		}
-		colIdx := -1
-		for i, col := range result.Columns {
-			if col.Name == ident.Name {
-				colIdx = i
-				break
-			}
-		}
-		if colIdx < 0 {
-			return fmt.Errorf("column %q not found in ORDER BY", ident.Name)
-		}
+
 		keys = append(keys, orderKey{
 			colIdx:   colIdx,
 			typeCode: result.Columns[colIdx].Type.Code,
@@ -342,7 +353,7 @@ func inferTypeFromValue(val any) *sppb.Type {
 }
 
 func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
-	// Extract table name from FROM clause
+	// Extract table name from FROM clause.
 	from, ok := sel.From.Source.(*ast.TableName)
 	if !ok {
 		return nil, fmt.Errorf("unsupported FROM source: %T", sel.From.Source)
@@ -359,7 +370,7 @@ func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
 		return nil, err
 	}
 
-	// Always read all columns so that expressions referencing any column can be evaluated.
+	// Always read all columns so expressions referencing any column can be evaluated.
 	allIndexes := make([]int, len(table.Cols))
 	for i := range allIndexes {
 		allIndexes[i] = i
@@ -384,20 +395,30 @@ func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
 		rows = table.ReadAll(allIndexes)
 	}
 
-	// Determine column metadata from the first row (or infer from expression type).
-	// We must build metadata before encoding rows.
-	result := &Result{}
+	// Delegate to aggregate path when GROUP BY, HAVING, or aggregate functions are present.
+	needsAgg := sel.GroupBy != nil || sel.Having != nil || hasAggregatesInResults(sel.Results)
+	if needsAgg {
+		result, err := applyGroupByAndAggregates(table, rows, sel, selectItems)
+		if err != nil {
+			return nil, err
+		}
+		if sel.AllOrDistinct == "DISTINCT" {
+			applyDistinct(result)
+		}
+		return result, nil
+	}
 
-	// Build columns metadata using the first row for type inference when needed.
+	// --- Non-aggregate path ---
+
+	result := &Result{}
 	columnsBuilt := false
+
 	if len(rows) == 0 {
-		// No rows: infer column types from identifiers or use STRING as fallback.
+		// No rows: infer column types from schema where possible.
 		for _, si := range selectItems {
-			colType := inferSpannerType(nil, table, si.expr)
-			// For identifier expressions with no rows, resolve from schema.
 			result.Columns = append(result.Columns, &sppb.StructType_Field{
 				Name: si.name,
-				Type: colType,
+				Type: inferSpannerType(nil, table, si.expr),
 			})
 		}
 		columnsBuilt = true
@@ -414,28 +435,67 @@ func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
 			}
 
 			if !columnsBuilt {
-				colType := inferSpannerType(val, table, si.expr)
 				result.Columns = append(result.Columns, &sppb.StructType_Field{
 					Name: si.name,
-					Type: colType,
+					Type: inferSpannerType(val, table, si.expr),
 				})
 			}
 
-			// Encode the value. For identifier expressions, use the column's own type.
+			// Use the column's native encoding for direct identifier references.
 			if ident, ok := si.expr.(*ast.Ident); ok {
 				if idx, ok := table.ColIndex[ident.Name]; ok {
 					vals[i] = store.EncodeValue(val, table.Cols[idx].Type)
 					continue
 				}
 			}
-			// For computed expressions, infer type from value.
 			vals[i] = encodeComputedValue(val)
 		}
 		columnsBuilt = true
 		result.Rows = append(result.Rows, &structpb.ListValue{Values: vals})
 	}
 
+	if sel.AllOrDistinct == "DISTINCT" {
+		applyDistinct(result)
+	}
+
 	return result, nil
+}
+
+// applyDistinct removes duplicate rows from the result in-place.
+func applyDistinct(result *Result) {
+	seen := make(map[string]bool, len(result.Rows))
+	deduped := result.Rows[:0]
+	for _, row := range result.Rows {
+		key := rowKey(row)
+		if !seen[key] {
+			seen[key] = true
+			deduped = append(deduped, row)
+		}
+	}
+	result.Rows = deduped
+}
+
+// rowKey builds a unique, collision-resistant string key from all values in a result row.
+// Each value is encoded with a type-prefix so that, e.g., int64(1) and string("1") produce
+// different keys.
+func rowKey(row *structpb.ListValue) string {
+	var sb strings.Builder
+	for _, v := range row.Values {
+		switch k := v.Kind.(type) {
+		case *structpb.Value_NullValue:
+			sb.WriteString("N\x00")
+		case *structpb.Value_BoolValue:
+			sb.WriteString(fmt.Sprintf("B%v\x00", k.BoolValue))
+		case *structpb.Value_NumberValue:
+			sb.WriteString(fmt.Sprintf("F%v\x00", k.NumberValue))
+		case *structpb.Value_StringValue:
+			// Length-prefix the string to prevent "S3:foo" + "bar" colliding with "S6:foobar".
+			sb.WriteString(fmt.Sprintf("S%d:%s\x00", len(k.StringValue), k.StringValue))
+		default:
+			sb.WriteString(fmt.Sprintf("?%v\x00", v))
+		}
+	}
+	return sb.String()
 }
 
 // encodeComputedValue encodes a Go value returned by an expression into a protobuf Value.

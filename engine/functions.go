@@ -15,6 +15,13 @@ import (
 
 // evalCallExpr dispatches to built-in function implementations.
 func evalCallExpr(ctx *evalContext, e *ast.CallExpr) (any, error) {
+	// Return pre-computed aggregate value if available (set during GROUP BY evaluation).
+	if ctx.aggValues != nil {
+		if v, ok := ctx.aggValues[e]; ok {
+			return v, nil
+		}
+	}
+
 	name := strings.ToUpper(e.Func.Idents[len(e.Func.Idents)-1].Name)
 
 	// Evaluate arguments eagerly for most functions.
