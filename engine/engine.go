@@ -58,12 +58,12 @@ func executeQuery(db *store.Database, qs *ast.QueryStatement) (*Result, error) {
 		return executeSelectLiteral(sel)
 	}
 
-	result, err := executeSelectFrom(db, sel)
+	result, orderByApplied, err := executeSelectFrom(db, sel, orderBy)
 	if err != nil {
 		return nil, err
 	}
 
-	if orderBy != nil {
+	if orderBy != nil && !orderByApplied {
 		if err := applyOrderBy(result, orderBy); err != nil {
 			return nil, err
 		}
@@ -352,22 +352,82 @@ func inferTypeFromValue(val any) *sppb.Type {
 	}
 }
 
-func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
+// sortRawRowsByOrderBy sorts rows using ORDER BY expressions evaluated against table columns.
+// Returns (sortedRows, applied). If any ORDER BY expr is not a simple column identifier
+// resolvable in the table schema, applied is false and the caller falls back to
+// result-column-based sorting via applyOrderBy.
+//
+// Requires that rows were read with full sequential column indexes (allIndexes = [0..N-1]),
+// so that row.Data[i] corresponds to table.Cols[i].
+func sortRawRowsByOrderBy(rows []store.Row, table *store.Table, orderBy *ast.OrderBy) ([]store.Row, bool) {
+	type sortKey struct {
+		colIdx int
+		desc   bool
+	}
+	var keys []sortKey
+
+	for _, item := range orderBy.Items {
+		ident, ok := item.Expr.(*ast.Ident)
+		if !ok {
+			return rows, false
+		}
+		// Case-insensitive column lookup to match Spanner identifier semantics.
+		idx := -1
+		for i, col := range table.Cols {
+			if strings.EqualFold(col.Name, ident.Name) {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return rows, false
+		}
+		keys = append(keys, sortKey{
+			colIdx: idx,
+			desc:   item.Dir == ast.DirectionDesc,
+		})
+	}
+
+	sorted := make([]store.Row, len(rows))
+	copy(sorted, rows)
+	slices.SortStableFunc(sorted, func(a, b store.Row) int {
+		for _, k := range keys {
+			var va, vb any
+			if k.colIdx < len(a.Data) {
+				va = a.Data[k.colIdx]
+			}
+			if k.colIdx < len(b.Data) {
+				vb = b.Data[k.colIdx]
+			}
+			c := store.CompareValues(va, vb)
+			if c != 0 {
+				if k.desc {
+					return -c
+				}
+				return c
+			}
+		}
+		return 0
+	})
+	return sorted, true
+}
+
+func executeSelectFrom(db *store.Database, sel *ast.Select, orderBy *ast.OrderBy) (*Result, bool, error) {
 	// Extract table name from FROM clause.
 	from, ok := sel.From.Source.(*ast.TableName)
 	if !ok {
-		return nil, fmt.Errorf("unsupported FROM source: %T", sel.From.Source)
+		return nil, false, fmt.Errorf("unsupported FROM source: %T", sel.From.Source)
 	}
 	tableName := from.Table.Name
 
 	table, err := db.GetTable(tableName)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	selectItems, err := buildSelectItems(table, sel.Results)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	// Always read all columns so expressions referencing any column can be evaluated.
@@ -385,7 +445,7 @@ func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
 			evalCtx.row = row
 			match, err := evalWhere(evalCtx, sel.Where.Expr)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if match {
 				rows = append(rows, row)
@@ -400,15 +460,26 @@ func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
 	if needsAgg {
 		result, err := applyGroupByAndAggregates(table, rows, sel, selectItems)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if sel.AllOrDistinct == "DISTINCT" {
 			applyDistinct(result)
 		}
-		return result, nil
+		return result, false, nil
 	}
 
 	// --- Non-aggregate path ---
+
+	// For non-aggregate queries, sort raw rows by ORDER BY before projection.
+	// This allows ORDER BY to reference table columns not in the SELECT list.
+	orderByApplied := false
+	if orderBy != nil {
+		sorted, applied := sortRawRowsByOrderBy(rows, table, orderBy)
+		if applied {
+			rows = sorted
+			orderByApplied = true
+		}
+	}
 
 	result := &Result{}
 	columnsBuilt := false
@@ -431,7 +502,7 @@ func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
 		for i, si := range selectItems {
 			val, err := evalExpr(evalCtx, si.expr)
 			if err != nil {
-				return nil, fmt.Errorf("SELECT expression %q: %w", si.name, err)
+				return nil, false, fmt.Errorf("SELECT expression %q: %w", si.name, err)
 			}
 
 			if !columnsBuilt {
@@ -458,7 +529,7 @@ func executeSelectFrom(db *store.Database, sel *ast.Select) (*Result, error) {
 		applyDistinct(result)
 	}
 
-	return result, nil
+	return result, orderByApplied, nil
 }
 
 // applyDistinct removes duplicate rows from the result in-place.

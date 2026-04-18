@@ -199,4 +199,3 @@ func executeDelete(db *store.Database, del *ast.Delete) (int64, error) {
 	}
 	return int64(len(keys)), nil
 }
-

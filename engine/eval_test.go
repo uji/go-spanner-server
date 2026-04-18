@@ -346,6 +346,25 @@ func TestOrderBy_WithWhere(t *testing.T) {
 	}
 }
 
+func TestOrderBy_NonProjectedColumn(t *testing.T) {
+	db := setupTestDB(t)
+	// ORDER BY SingerId (not in SELECT list) should still work.
+	result, err := Execute(db, "SELECT FirstName FROM Singers ORDER BY SingerId DESC")
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	want := []string{"Maria", "Alice", "Catalina", "Marc"}
+	if len(result.Rows) != len(want) {
+		t.Fatalf("expected %d rows, got %d", len(want), len(result.Rows))
+	}
+	for i, row := range result.Rows {
+		got := row.Values[0].GetStringValue()
+		if got != want[i] {
+			t.Errorf("row %d: got %q, want %q", i, got, want[i])
+		}
+	}
+}
+
 // --- LIMIT / OFFSET tests ---
 
 func TestLimit_Basic(t *testing.T) {

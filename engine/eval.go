@@ -179,7 +179,6 @@ func evalIfExpr(ctx *evalContext, e *ast.IfExpr) (any, error) {
 	return evalExpr(ctx, e.ElseResult)
 }
 
-
 func evalBinaryExpr(ctx *evalContext, e *ast.BinaryExpr) (any, error) {
 	// Handle logical operators first (short-circuit)
 	switch e.Op {

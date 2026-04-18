@@ -393,8 +393,8 @@ func TestFunction_SIGN(t *testing.T) {
 		singerId int
 		want     string
 	}{
-		{1, "30"},  // Age=30, SIGN=1
-		{2, "25"},  // Age=25, SIGN=1
+		{1, "30"}, // Age=30, SIGN=1
+		{2, "25"}, // Age=25, SIGN=1
 	}
 	for _, tc := range tests {
 		_ = tc

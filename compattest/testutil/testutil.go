@@ -113,7 +113,11 @@ func formatValue(gcv spanner.GenericColumnValue) string {
 		if err := gcv.Decode(&v); err != nil {
 			return fmt.Sprintf("<error:%v>", err)
 		}
-		return strconv.FormatFloat(v, 'f', -1, 64)
+		s := strconv.FormatFloat(v, 'f', -1, 64)
+		if !strings.Contains(s, ".") && s != "NaN" && !strings.HasSuffix(s, "Inf") {
+			s += ".0"
+		}
+		return s
 	case sppb.TypeCode_BOOL:
 		var v bool
 		if err := gcv.Decode(&v); err != nil {
